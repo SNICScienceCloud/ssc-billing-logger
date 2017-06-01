@@ -1,0 +1,222 @@
+{
+    "id": "3",
+    "name": "Instance pricing",
+    "description": "Instance pricing",
+    "author": "4",
+    "last_modified": "2017-04-19 10:25:37",
+    "data": [
+        [
+            "Region",
+            "Flavor",
+            "VCPU",
+            "RAM (MB)",
+            "DISK (GB)",
+            "Coin\/hr"
+        ],
+        [
+            "HPC2N",
+            "ssc.tiny",
+            "1",
+            "512",
+            "1",
+            "0.05\n"
+        ],
+        [
+            "HPC2N",
+            "ssc.small",
+            "1",
+            "2000",
+            "20",
+            "0.125"
+        ],
+        [
+            "HPC2N",
+            "ssc.medium",
+            "2",
+            "4000",
+            "40",
+            "0.25"
+        ],
+        [
+            "HPC2N",
+            "ssc.large",
+            "4",
+            "8000",
+            "80",
+            "0.5\n"
+        ],
+        [
+            "HPC2N",
+            "ssc.xlarge",
+            "8",
+            "16000",
+            "160",
+            "1"
+        ],
+        [
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+        ],
+        [
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+        ],
+        [
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+        ],
+        [
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+        ],
+        [
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+        ],
+        [
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+        ],
+        [
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+        ],
+        [
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+        ],
+        [
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+        ],
+        [
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+        ],
+        [
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+        ],
+        [
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+        ],
+        [
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+        ],
+        [
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+        ]
+    ],
+    "options": {
+        "last_editor": 4,
+        "table_head": true,
+        "table_foot": false,
+        "alternating_row_colors": true,
+        "row_hover": true,
+        "print_name": true,
+        "print_name_position": "above",
+        "print_description": false,
+        "print_description_position": "below",
+        "extra_css_classes": "",
+        "use_datatables": true,
+        "datatables_sort": true,
+        "datatables_filter": true,
+        "datatables_paginate": true,
+        "datatables_lengthchange": true,
+        "datatables_paginate_entries": 10,
+        "datatables_info": true,
+        "datatables_scrollx": false,
+        "datatables_custom_commands": ""
+    },
+    "visibility": {
+        "rows": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+        ],
+        "columns": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+        ]
+    }
+}

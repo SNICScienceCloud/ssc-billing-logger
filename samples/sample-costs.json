@@ -1,0 +1,18 @@
+{
+  "regions": {
+    "HPC2N": {
+      "ssc.tiny": 0.05,
+      "ssc.small": 0.125,
+      "ssc.medium": 0.25,
+      "ssc.large": 0.5,
+      "ssc.xlarge": 1
+    },
+    "C3SE": {
+      "ssc.tiny": 0.05,
+      "ssc.small": 0.125,
+      "ssc.medium": 0.25,
+      "ssc.large": 0.5,
+      "ssc.xlarge": 1
+    }
+  }
+}

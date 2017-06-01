@@ -1,0 +1,11 @@
+Region,Flavor,VCPU,RAM (MB),DISK (GB),Coin/hr
+HPC2N,ssc.tiny,1,512,1,0.05
+HPC2N,ssc.small,1,2000,20,0.125
+HPC2N,ssc.medium,2,4000,40,0.25
+HPC2N,ssc.large,4,8000,80,0.5
+HPC2N,ssc.xlarge,8,16000,160,1
+C3SE,ssc.tiny,1,512,1,0.05
+C3SE,ssc.small,1,2000,20,0.125
+C3SE,ssc.medium,2,4000,40,0.25
+C3SE,ssc.large,4,8000,80,0.5
+C3SE,ssc.xlarge,8,16000,160,1
