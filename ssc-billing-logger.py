@@ -18,6 +18,7 @@ from urllib.parse import urlencode
 DEFAULT_CONFIG_FILENAME = "/etc/ssc-billing-extract.conf"
 ppr = pprint.PrettyPrinter(indent=4, stream=sys.stderr)
 
+DEBUG_TRACE_URLS = False
 
 class Config:
     def __init__(self, filename = DEFAULT_CONFIG_FILENAME):
@@ -42,7 +43,7 @@ class Config:
 class CostDefinition:
     def __init__(self, region, dirname):
         self.flavor_costs = {}
-        cost_filename = os.path.join(dirname, "state/costs.json")
+        cost_filename = os.path.join(dirname, "logger-state/costs.json")
         try:
             with open(cost_filename, 'r') as f:
                 res = json.load(f)
@@ -54,16 +55,23 @@ class CostDefinition:
         except KeyError:
             raise RuntimeError('[E1006] Could not parse cost definition file')
 
-    def lookup(self, flavor_name):
+    def lookup_compute(self, flavor_name):
         try:
             return self.flavor_costs[flavor_name]
         except KeyError:
             sys.stderr.write('Cost requested for flavour %s which is not defined\n' % (flavour_name,))
             return 0.0
 
+    def lookup_block_storage(self, gigabytes):
+        try:
+            return self.flavor_costs['storage.block'] * gigabytes
+        except KeyError:
+            sys.stderr.write('Cost requested for flavour storage.block which is not defined [coins per (GiB*h)]\n')
+            return 0.0
+
 class PersistentState:
     def __init__(self, dirname):
-        self.state_filename = os.path.join(dirname, "state/state.json")
+        self.state_filename = os.path.join(dirname, "logger-state/state.json")
         self.last_timepoint = None
         try:
             with open(self.state_filename, 'r') as file:
@@ -84,12 +92,10 @@ class PersistentState:
 
 CR_NAMESPACE = "http://sams.snic.se/namespaces/2016/04/cloudrecords"
 CLOUD_COMPUTE_RECORD = ET.QName("{%s}CloudComputeRecord" % CR_NAMESPACE)
+CLOUD_STORAGE_RECORD = ET.QName("{%s}CloudStorageRecord" % CR_NAMESPACE)
 ET.register_namespace('cr', CR_NAMESPACE)
 
-class ComputeRecord:
-    def qname(name):
-        return ET.QName('{%s}%s' % (CR_NAMESPACE, name))
-
+class CloudRecord:
     def __init__(self, cfg):
         self.RecordIdentity = None
         self.Site = cfg.site
@@ -101,115 +107,152 @@ class ComputeRecord:
         self.Duration = None
         self.Region = cfg.region
         self.Zone = None
-        self.Flavour = None
         self.Cost = None
-        self.AllocatedCPU = None
         self.AllocatedDisk = None
+        self.IOPS = None
+
+    def qname(name):
+        return ET.QName('{%s}%s' % (CR_NAMESPACE, name))
+
+    def add_sub_element(element, tag_name, value):
+        ret = ET.SubElement(element, ComputeRecord.qname(tag_name))
+        ret.text = str(value)
+        return ret
+
+    def add_sub_element_int(element, tag_name, value):
+        ret = ET.SubElement(element, ComputeRecord.qname(tag_name))
+        ret.text = str(int(value))
+        return ret
+
+    def add_sub_element_with_default(element, tag_name, value, default=0):
+        ret = ET.SubElement(element, ComputeRecord.qname(tag_name))
+        if value is not None:
+            ret.text = str(value)
+        else:
+            ret.text = str(default)
+        return ret
+
+    def add_sub_element_with_default_int(element, tag_name, value, default=0):
+        ret = ET.SubElement(element, ComputeRecord.qname(tag_name))
+        if value is not None:
+            ret.text = str(int(value))
+        else:
+            ret.text = str(int(default))
+        return ret
+
+    def add_sub_element_if_not_none(element, tag_name, value):
+        if value is not None:
+            return add_sub_element(element, tag_name, value)
+
+    def add_sub_element_if_not_none_int(element, tag_name, value):
+        if value is not None:
+            return add_sub_element(element, tag_name, value)
+
+    def add_attribute(element, name, value):
+        element.set(ComputeRecord.qname(name), value)
+
+class ComputeRecord(CloudRecord):
+
+    def __init__(self, cfg):
+        super().__init__(cfg)
+
+        self.Flavour = None
+        self.AllocatedCPU = None
         self.AllocatedMemory = None
 
         self.UsedCPU = None
+        self.UsedDisk = None
         self.UsedMemory = None
         self.UsedNetworkUp = None
         self.UsedNetworkDown = None
-        self.IOPS = None
-
-    def json(self):
-        return json.dumps(dict(RecordIdentity=self.RecordIdentity,
-                                Site=self.Site,
-                                Project=self.Project,
-                                User=self.User,
-                                InstanceId=self.InstanceId,
-                                StartTime=self.StartTime.isoformat(),
-                                EndTime=self.EndTime.isoformat(),
-                                Duration=self.Duration,
-                                Region=self.Region,
-                                Zone=self.Zone,
-                                Flavour=self.Flavour,
-                                Cost=self.Cost,
-                                AllocatedCPU=self.AllocatedCPU,
-                                AllocatedDisk=self.AllocatedDisk,
-                                AllocatedMemory=self.AllocatedMemory,
-
-                                UsedCPU=self.UsedCPU,
-                                UsedMemory=self.UsedMemory,
-                                UsedNetworkUp=self.UsedNetworkUp,
-                                UsedNetworkDown=self.UsedNetworkDown,
-                                IOPS=self.IOPS))
 
     def recordid(self):
         return "ssc/%s/cr/%s/%s" % (self.Site, self.InstanceId, self.EndTime.timestamp)
 
     def xml(self):
-        def add_sub_element(element, tag_name, value):
-            ret = ET.SubElement(element, ComputeRecord.qname(tag_name))
-            ret.text = str(value)
-            return ret
-
-        def add_sub_element_int(element, tag_name, value):
-            ret = ET.SubElement(element, ComputeRecord.qname(tag_name))
-            ret.text = str(int(value))
-            return ret
-
-        def add_sub_element_with_default(element, tag_name, value, default=0):
-            ret = ET.SubElement(element, ComputeRecord.qname(tag_name))
-            if value is not None:
-                ret.text = str(value)
-            else:
-                ret.text = str(default)
-            return ret
-
-        def add_sub_element_with_default_int(element, tag_name, value, default=0):
-            ret = ET.SubElement(element, ComputeRecord.qname(tag_name))
-            if value is not None:
-                ret.text = str(int(value))
-            else:
-                ret.text = str(int(default))
-            return ret
-
-        def add_sub_element_if_not_none(element, tag_name, value):
-            if value is not None:
-                return add_sub_element(element, tag_name, value)
-
-        def add_sub_element_if_not_none_int(element, tag_name, value):
-            if value is not None:
-                return add_sub_element(element, tag_name, value)
-
-        def add_attribute(element, name, value):
-            element.set(ComputeRecord.qname(name), value)
-
         root = ET.Element(ComputeRecord.qname('CloudComputeRecord'))
-        ri = add_sub_element(root, 'RecordIdentity', '')
-        add_attribute(ri, 'createTime', arrow.now().to('utc').isoformat())
-        add_attribute(ri, 'recordId', self.recordid())
-        add_sub_element(root, 'Site', self.Site)
-        add_sub_element(root, 'Project', self.Project)
-        add_sub_element(root, 'User', self.User)
-        add_sub_element(root, 'InstanceId', self.InstanceId)
-        add_sub_element(root, 'StartTime', self.StartTime.to('utc').isoformat())
-        add_sub_element(root, 'EndTime', self.EndTime.to('utc').isoformat())
-        add_sub_element(root, 'Duration', self.Duration)
-        add_sub_element(root, 'Region', self.Region)
-        add_sub_element(root, 'Zone', self.Zone)
-        add_sub_element(root, 'Flavour', self.Flavour)
-        add_sub_element_with_default(root, 'Cost', self.Cost)
-        add_sub_element_with_default(root, 'AllocatedCPU', self.AllocatedCPU)
-        add_sub_element_with_default_int(root, 'AllocatedDisk', self.AllocatedDisk)
-        add_sub_element_with_default_int(root, 'AllocatedMemory', self.AllocatedMemory)
-        add_sub_element_if_not_none(root, 'UsedCPU', self.UsedCPU)
-        add_sub_element_if_not_none_int(root, 'UsedMemory', self.UsedCPU)
-        add_sub_element_if_not_none_int(root, 'UsedNetworkUp', self.UsedNetworkUp)
-        add_sub_element_if_not_none_int(root, 'UsedNetworkDown', self.UsedNetworkDown)
-        add_sub_element_if_not_none_int(root, 'IOPS', self.IOPS)
+        ri = CloudRecord.add_sub_element(root, 'RecordIdentity', '')
+        CloudRecord.add_attribute(ri, 'createTime', arrow.now().to('utc').isoformat())
+        CloudRecord.add_attribute(ri, 'recordId', self.recordid())
+
+        CloudRecord.add_sub_element(root, 'Site', self.Site)
+        CloudRecord.add_sub_element(root, 'Project', self.Project)
+        CloudRecord.add_sub_element(root, 'User', self.User)
+        CloudRecord.add_sub_element(root, 'InstanceId', self.InstanceId)
+        CloudRecord.add_sub_element(root, 'StartTime', self.StartTime.to('utc').isoformat())
+        CloudRecord.add_sub_element(root, 'EndTime', self.EndTime.to('utc').isoformat())
+        CloudRecord.add_sub_element(root, 'Duration', self.Duration)
+        CloudRecord.add_sub_element(root, 'Region', self.Region)
+        CloudRecord.add_sub_element(root, 'Zone', self.Zone)
+        CloudRecord.add_sub_element(root, 'Flavour', self.Flavour)
+        CloudRecord.add_sub_element_with_default(root, 'Cost', self.Cost)
+
+        CloudRecord.add_sub_element_with_default(root, 'AllocatedCPU', self.AllocatedCPU)
+        CloudRecord.add_sub_element_with_default_int(root, 'AllocatedDisk', self.AllocatedDisk)
+        CloudRecord.add_sub_element_with_default_int(root, 'AllocatedMemory', self.AllocatedMemory)
+        CloudRecord.add_sub_element_if_not_none(root, 'UsedCPU', self.UsedCPU)
+        CloudRecord.add_sub_element_if_not_none_int(root, 'UsedDisk', self.UsedDisk)
+        CloudRecord.add_sub_element_if_not_none_int(root, 'UsedMemory', self.UsedCPU)
+        CloudRecord.add_sub_element_if_not_none_int(root, 'UsedNetworkUp', self.UsedNetworkUp)
+        CloudRecord.add_sub_element_if_not_none_int(root, 'UsedNetworkDown', self.UsedNetworkDown)
+        CloudRecord.add_sub_element_if_not_none_int(root, 'IOPS', self.IOPS)
+
+        return root
+
+class StorageRecord(CloudRecord):
+    def __init__(self, cfg):
+        super().__init__(cfg)
+
+        self.StorageType = None # "Block" or "Object"
+        self.FileCount = None
+
+    def recordid(self):
+        return "ssc/%s/sr/%s/%s" % (self.Site, self.InstanceId, self.EndTime.timestamp)
+
+    def xml(self):
+        root = ET.Element(ComputeRecord.qname('CloudStorageRecord'))
+        ri = CloudRecord.add_sub_element(root, 'RecordIdentity', '')
+        CloudRecord.add_attribute(ri, 'createTime', arrow.now().to('utc').isoformat())
+        CloudRecord.add_attribute(ri, 'recordId', self.recordid())
+
+        CloudRecord.add_sub_element(root, 'Site', self.Site)
+        CloudRecord.add_sub_element(root, 'Project', self.Project)
+        CloudRecord.add_sub_element(root, 'User', self.User)
+        CloudRecord.add_sub_element(root, 'InstanceId', self.InstanceId)
+        CloudRecord.add_sub_element(root, 'StorageType', self.StorageType)
+        CloudRecord.add_sub_element(root, 'StartTime', self.StartTime.to('utc').isoformat())
+        CloudRecord.add_sub_element(root, 'EndTime', self.EndTime.to('utc').isoformat())
+        CloudRecord.add_sub_element(root, 'Duration', self.Duration)
+        CloudRecord.add_sub_element(root, 'Region', self.Region)
+        CloudRecord.add_sub_element(root, 'Zone', self.Zone)
+        CloudRecord.add_sub_element_with_default(root, 'Cost', self.Cost)
+
+        CloudRecord.add_sub_element_with_default_int(root, 'AllocatedDisk', self.AllocatedDisk)
+        CloudRecord.add_sub_element_if_not_none_int(root, 'FileCount', self.FileCount)
+        CloudRecord.add_sub_element_if_not_none_int(root, 'IOPS', self.IOPS)
+
         return root
 
 def http_category(code):
     return code // 100 * 100
 
 class OpenStack:
+    def get_shim(self, url, *args, **kwargs):
+        if DEBUG_TRACE_URLS:
+            sys.stderr.write("GET %s\n" % (url,))
+        return requests.get(url, *args, **kwargs)
+
+    def post_shim(self, url, *args, **kwargs):
+        if DEBUG_TRACE_URLS:
+            sys.stderr.write("POST %s\n" % (url,))
+        return requests.post(url, *args, **kwargs)
+
     def __init__(self, cfg):
         self.proxies = dict(http=cfg.socks_proxy_url) if cfg.socks_proxy_url else None
-        self.get = partial(requests.get, proxies=self.proxies)
-        self.post = partial(requests.post, proxies=self.proxies)
+        # self.get = partial(requests.get, proxies=self.proxies)
+        # self.post = partial(requests.post, proxies=self.proxies)
+        self.get = partial(self.get_shim, proxies=self.proxies)
+        self.post = partial(self.post_shim, proxies=self.proxies)
 
         self.keystone_url = cfg.keystone_url
         self.ceilometer_url = cfg.ceilometer_url
@@ -259,7 +302,7 @@ class OpenStack:
 
 class MeterSet:
     def __init__(self, openstack):
-        ar = openstack.scoped_get(openstack.ceilometer_url + '/meters')
+        ar = openstack.scoped_get(openstack.ceilometer_url + '/meters?limit=1000000000')
         if http_category(ar.status_code) != 200:
             raise RuntimeError("[E1002] Could not fetch meters from ceilometer")
         meters = json.loads(ar.text)
@@ -281,7 +324,7 @@ class MeterSet:
                 proj_info = json.loads(ar.text)
                 self.valid_meters_by_project[proj_id] = {
                     'proj_info': proj_info,
-                    'meters': list(filter(lambda x: x['name'] == 'vcpus' or x['name'] == 'memory', group))
+                    'meters': list(filter(lambda x: x['name'] in {'vcpus', 'memory', 'volume.size'}, group))
                 }
             elif http_category(ar.status_code) == 400:
                 ppr.pprint("project %s is missing" % (proj_id,))
@@ -292,27 +335,32 @@ def populate_instances(openstack, period_start, period_end):
         return [('q.field', field), ('q.op', op), ('q.value', value)]
         
     instance_measurements = {}
-    ar = openstack.scoped_get(openstack.ceilometer_url + '/resources')
+
+    ar = openstack.scoped_get(openstack.ceilometer_url + '/resources?limit=1000000000')
     if http_category(ar.status_code) != 200:
         raise RuntimeError("[E1004] Could not fetch resources from ceilometer")
     resources = json.loads(ar.text)
     if len(resources) == 0:
             sys.stderr.write("[W1001] Ceilometer resources collection is empty, services may need restarting\n");
 
+    duration_seconds = 3600
+    duration_iso = 'PT%dS' % (duration_seconds,)
+
+    stat_params = [('groupby', 'resource_id'),
+                    ('groupby', 'project_id'),
+                    ('groupby', 'user_id'),
+                    ('period', duration_seconds),
+                    ('q.field', 'timestamp'),
+                    ('q.op', 'gt'),
+                    ('q.value', period_start),
+                    ('q.field', 'timestamp'),
+                    ('q.op', 'le'),
+                    ('q.value', period_end)]
+
     for (meter, field) in [("vcpus", 'AllocatedCPU'), ("memory", 'AllocatedMemory')]:
         stat_url = '%s/meters/%s/statistics' % (openstack.ceilometer_url, meter)
 
-        duration_seconds = 3600
-        duration_iso = 'PT%dS' % (duration_seconds,)
-
-        stat_params = [('groupby', 'resource_id'),
-                        ('groupby', 'project_id'),
-                        ('groupby', 'user_id'),
-                        ('period', duration_seconds)] + \
-                        mkquery('timestamp', 'gt', period_start) + \
-                        mkquery('timestamp', 'le', period_end)
-
-        ar = openstack.scoped_get(stat_url, params=stat_params)
+        ar = openstack.scoped_get(stat_url, params=stat_params, timeout=120)
         if http_category(ar.status_code) == 200:
             res = json.loads(ar.text)
             for entry in res:
@@ -330,7 +378,6 @@ def populate_instances(openstack, period_start, period_end):
                         metadata = res_res['metadata']
 
                         inst = instance_measurements[key] = {}
-                        inst['InstanceId'] = metadata['instance_id']
                         inst['Flavor'] = metadata['instance_type']
                         inst['ResourceId'] = res_id
                         inst['ProjectId'] = res_res['project_id']
@@ -340,19 +387,78 @@ def populate_instances(openstack, period_start, period_end):
                         inst['Duration'] = duration_iso
                         inst['Zone'] = metadata.get('availability_zone', 'default')
                     except StopIteration:
-                        pass
+                        ppr.pprint(r)
 
                 if inst:
                     inst[field] = entry['max']
+        else:
+            # [LV] Print this error case nicer?
+            ppr.pprint(ar.status_code)
+            ppr.pprint(ar.text)
+
+    for (meter, field) in [("volume.size", 'AllocatedDisk')]:
+        stat_url = '%s/meters/%s/statistics' % (openstack.ceilometer_url, meter)
+
+        ar = openstack.scoped_get(stat_url, params=stat_params, timeout=120)
+        if http_category(ar.status_code) == 200:
+            res = json.loads(ar.text)
+            for entry in res:
+                res_id = entry['groupby']['resource_id']
+                res_res = next(r for r in resources if r['resource_id'] == res_id)
+                metadata = res_res['metadata']
+
+                start_time = arrow.get(entry['period_start'])
+                end_time = arrow.get(entry['period_end'])
+                key = (res_id, start_time, end_time)
+                inst = instance_measurements[key] = {}
+                inst['ResourceId'] = res_id
+                inst['ProjectId'] = res_res['project_id']
+                inst['UserId'] = res_res['user_id']
+                inst['StartTime'] = arrow.get(entry['period_start'])
+                inst['EndTime'] = arrow.get(entry['period_end'])
+                inst['Duration'] = duration_iso
+                inst['Zone'] = metadata.get('availability_zone', 'default')
+                inst[field] = entry['max']
+        else:
+            # [LV] Print this error case nicer?
+            ppr.pprint(ar.status_code)
+            ppr.pprint(ar.text)
+
     return instance_measurements
 
-def gather_cloud_records(openstack, cfg, instance_measurements, cost_definition):
+class IdentityCache:
+    def __init__(self, openstack):
+        self.openstack = openstack
+        self.users = {}
+        self.projects = {}
+
+    def get_project(self, project_id):
+        if project_id in self.projects:
+            return self.projects[project_id]
+        else:
+            ar = self.openstack.scoped_get(self.openstack.keystone_url + '/projects/%s' % project_id)
+            if http_category(ar.status_code) != 200:
+                return None
+            res = json.loads(ar.text)
+            self.projects[project_id] = res
+            return res
+
+    def get_user(self, user_id):
+        if user_id in self.users:
+            return self.users[user_id]
+        else:
+            ar = self.openstack.scoped_get(self.openstack.keystone_url + '/users/%s' % user_id)
+            if http_category(ar.status_code) != 200:
+                return None
+            res = json.loads(ar.text)
+            self.users[user_id] = res
+            return res
+
+def gather_cloud_records(openstack, cfg, instance_measurements, cost_definition, identity_cache):
     # Required: RecordIdentity, Site, Project, User, InstanceId, StartTime, EndTime, Duration, Region, Zone,
     #           Flavour, Cost, AllocatedCPU, AllocatedDisk, AllocatedMemory
     # Optional: UsedCPU, UsedMemory, UsedNetworkUp, UsedNetworkDown, IOPS
 
-    users = {}
-    projects = {}
     flavors = {}
 
     ar = openstack.scoped_get(openstack.compute_url + '/flavors')
@@ -362,48 +468,67 @@ def gather_cloud_records(openstack, cfg, instance_measurements, cost_definition)
     for flavor in json.loads(ar.text)['flavors']:
         flavors[flavor['id']] = flavor
 
+    num_compute = 0
+    num_storage = 0
     crs = []
     for rid, inst in instance_measurements.items():
         uid = inst['UserId']
         pid = inst['ProjectId']
-        if pid not in projects:
-            ar = openstack.scoped_get(openstack.keystone_url + '/projects/%s' % pid)
-            if http_category(ar.status_code) != 200:
-                next
-            projects[pid] = json.loads(ar.text)
-        if uid not in users:
-            ar = openstack.scoped_get(openstack.keystone_url + '/users/%s' % uid)
-            if http_category(ar.status_code) != 200:
-                next
-            users[uid] = json.loads(ar.text)
-        proj = projects[pid]
+
+        user = identity_cache.get_user(uid)
+        proj = identity_cache.get_project(pid)
+
+        if user is None or proj is None:
+            # [LV] Handle this or print nicer?
+            ppr.pprint((uid, user))
+            ppr.pprint((pid, proj))
+            next
+
         try:
-            flavor_name = inst['Flavor']
-            cr = ComputeRecord(cfg)
-            cr.InstanceId = inst['ResourceId']
+            if 'AllocatedCPU' in inst and 'AllocatedMemory' in inst:
+                num_compute = num_compute + 1
+                flavor_name = inst['Flavor']
+                cr = ComputeRecord(cfg)
+                cr.Flavour = flavor_name
+                cr.Cost = cost_definition.lookup_compute(flavor_name)
+                cr.AllocatedCPU = inst['AllocatedCPU']
+                cr.AllocatedMemory = inst['AllocatedMemory']
+            else:
+                num_storage = num_storage + 1
+                gigabytes = inst['AllocatedDisk']
+                cr = StorageRecord(cfg)
+                cr.StorageType = 'Block'
+                cr.Cost = cost_definition.lookup_block_storage(gigabytes)
+                cr.AllocatedDisk = int(gigabytes * 2**32)
+
             cr.Project = proj['project']['name']
-            cr.User = users[uid]['user']['name']
-            cr.AllocatedCPU = inst['AllocatedCPU']
-            cr.AllocatedMemory = inst['AllocatedMemory']
+            cr.User = user['user']['name']
+            cr.InstanceId = inst['ResourceId']
             cr.StartTime = inst['StartTime']
             cr.EndTime = inst['EndTime']
             cr.Duration = inst['Duration']
             cr.Zone = inst['Zone']
-            cr.Flavour = flavor_name
-            cr.Cost = cost_definition.lookup(flavor_name)
+
             crs.append(cr)
         except KeyError as e:
             ppr.pprint(e)
             ppr.pprint(inst)
             raise
 
+    ppr.pprint('%d cloudrecords: %d compute, %d storage' % (len(crs), num_compute, num_storage))
+
     return crs
 
 def write_cloud_records(cfg, datetime_of_run, records):
     root = ET.Element(ComputeRecord.qname('CloudRecords'))
     for cr in records:
-        x = cr.xml()
-        root.append(x)
+        if cr is ComputeRecord:
+            x = cr.xml()
+            root.append(x)
+    for cr in records:
+        if cr is StorageRecord:
+            x = cr.xml()
+            root.append(x)
 
     xml_leaf_name = datetime_of_run.to('UTC').strftime('%Y%m%dT%H%MZ.xml')
     xml_filename = os.path.join(cfg.datadir, 'records', xml_leaf_name)
@@ -444,12 +569,15 @@ def write_cloud_records(cfg, datetime_of_run, records):
         """
 
 def main():
-    opts, args = getopt.getopt(sys.argv[1:], "c:")
+    opts, args = getopt.getopt(sys.argv[1:], "c:s")
 
     cfg_filename = None
+    do_singlestep = False
     for (k, v) in opts:
         if k == '-c':
             cfg_filename = v
+        if k == '-s':
+            do_singlestep = True
     cfg = Config(cfg_filename)
 
     cost_definition = CostDefinition(cfg.region, cfg.datadir)
@@ -463,9 +591,15 @@ def main():
     period_end = arrow.utcnow().floor('hour')
     if period_end <= period_start:
         return
+    if do_singlestep:
+        succ = period_start.replace(hours=+1)
+        if period_end < succ:
+            return
+        period_end = succ
 
     openstack = OpenStack(cfg)
-    meters = MeterSet(openstack)
+    unused = MeterSet(openstack)
+    # ppr.pprint(unused.valid_meters_by_project)
     # ppr.pprint(('valid meters by project', meters.valid_meters_by_project))
 
     # Required: RecordIdentity, Site, Project, User, InstanceId, StartTime, EndTime,
@@ -475,11 +609,12 @@ def main():
 
     instance_measurements = populate_instances(openstack, period_start, period_end)
     # ppr.pprint(('instance measurements', instance_measurements))
-    cloud_records = gather_cloud_records(openstack, cfg, instance_measurements, cost_definition)
 
+    identity_cache = IdentityCache(openstack)
+    cloud_records = gather_cloud_records(openstack, cfg, instance_measurements, cost_definition, identity_cache)
     write_cloud_records(cfg, period_end, cloud_records)
 
-#   persistent_state.last_timepoint = period_end
-#   persistent_state.write()
+    persistent_state.last_timepoint = period_end
+#    persistent_state.write()
 
 main()

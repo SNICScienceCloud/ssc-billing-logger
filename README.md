@@ -8,23 +8,14 @@ PySocks
 #Setup
 Create a configuration file from the template. 
 Fields for `password`, `keystone_url`, `ceilometer_url` should be grabbed from the local OpenStack installation.
-Remember to customize the site/region.
-
-{
-	"username": "admin",
-	"password": "0123456789abcdef",
-	"project": "admin",
-	"domain": "default",
-	"keystone_url": "http://1.2.3.4:35357/v3",
-	"ceilometer_url": "http://1.2.3.4:8777/v2",
-	"socks_proxy_url": "socks5://localhost:9998",
-	"site": "HPC2N",
-	"region": "HPC2N",
-	"datadir": "/opt/ssc-billing-logger/sgas-cr"
-}
+Remember to customize the site/region with centre name in allcaps. If no proxy is desired, remove the `socks_proxy_url` field completely.
 
 Create the data directory and its subdirectories:
 
-    mkdir -p $datadir/{records,state}
+    mkdir -p $datadir/{logger_state,records}
 
-Put a `costs.json` file in the `state` directory, an example file can be seen in `samples/costs.json`.
+Put a `costs.json` file in the `logger_state` directory, an example file can be seen in `samples/costs.json`.
+
+#Usage
+* -c config.conf -- override the configuration file location
+* -s -- run for a single hour instead of the full period since last reporting period.
