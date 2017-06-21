@@ -107,7 +107,6 @@ class CloudRecord:
         self.Zone = None
         self.Cost = None
         self.AllocatedDisk = None
-        self.IOPS = None
 
     def qname(name):
         return ET.QName('{%s}%s' % (CR_NAMESPACE, name))
@@ -163,6 +162,7 @@ class ComputeRecord(CloudRecord):
         self.UsedMemory = None
         self.UsedNetworkUp = None
         self.UsedNetworkDown = None
+        self.IOPS = None
 
     def recordid(self):
         return "ssc/%s/cr/%s/%s" % (self.Site, self.InstanceId, self.EndTime.timestamp)
@@ -226,8 +226,7 @@ class StorageRecord(CloudRecord):
         CloudRecord.add_sub_element_with_default(root, 'Cost', self.Cost)
 
         CloudRecord.add_sub_element_with_default_int(root, 'AllocatedDisk', self.AllocatedDisk)
-        CloudRecord.add_sub_element_if_not_none_int(root, 'FileCount', self.FileCount)
-        CloudRecord.add_sub_element_if_not_none_int(root, 'IOPS', self.IOPS)
+        CloudRecord.add_sub_element_with_default_int(root, 'FileCount', self.FileCount)
 
         return root
 
@@ -497,7 +496,7 @@ def gather_cloud_records(openstack, cfg, instance_measurements, cost_definition,
                 cr = StorageRecord(cfg)
                 cr.StorageType = 'Block'
                 cr.Cost = cost_definition.lookup_block_storage(gigabytes)
-                cr.AllocatedDisk = int(gigabytes * 2**32)
+                cr.AllocatedDisk = int(gigabytes * 2**30)
 
             cr.Project = proj['project']['name']
             cr.User = user['user']['name']
