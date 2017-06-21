@@ -5,14 +5,16 @@
       "ssc.small": 0.125,
       "ssc.medium": 0.25,
       "ssc.large": 0.5,
-      "ssc.xlarge": 1
+      "ssc.xlarge": 1,
+      "storage.block": 0.5
     },
     "C3SE": {
       "ssc.tiny": 0.05,
       "ssc.small": 0.125,
       "ssc.medium": 0.25,
       "ssc.large": 0.5,
-      "ssc.xlarge": 1
+      "ssc.xlarge": 1,
+      "storage.block": 0.5
     }
   }
 }
