@@ -518,13 +518,13 @@ def gather_cloud_records(openstack, cfg, instance_measurements, cost_definition,
     return crs
 
 def write_cloud_records(cfg, datetime_of_run, records):
-    root = ET.Element(ComputeRecord.qname('CloudRecords'))
+    root = ET.Element(CloudRecord.qname('CloudRecords'))
     for cr in records:
-        if cr is ComputeRecord:
+        if isinstance(cr, ComputeRecord):
             x = cr.xml()
             root.append(x)
     for cr in records:
-        if cr is StorageRecord:
+        if isinstance(cr, StorageRecord):
             x = cr.xml()
             root.append(x)
 
