@@ -10,8 +10,6 @@ import requests
 import os
 import sys
 
-# import sqlite3
-
 from functools import partial
 from urllib.parse import urlencode
 
@@ -536,38 +534,6 @@ def write_cloud_records(cfg, datetime_of_run, records):
         tree = ET.ElementTree(root)
         tree.write(f, encoding='unicode', xml_declaration=True)
 
-    """
-    with sqlite3.connect(os.path.join(cfg.datadir, 'dump.db')) as conn:
-        c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS recs
-                    (record_create_time TEXT, record_id TEXT, site TEXT, project TEXT, user TEXT,
-                    instance_id TEXT, start_time TEXT, end_time TEXT,
-                    duration INTEGER, region TEXT, zone TEXT, flavour TEXT,
-                    cost REAL, allocated_cpu REAL, allocated_disk REAL,
-                    allocated_memory REAL, used_cpu REAL, used_memory REAL,
-                    used_network_up REAL, used_network_down REAL, iops REAL)''')
-
-        create_time = arrow.utcnow().isoformat()
-
-        for cr in records:
-            tup = (create_time, cr.recordid(), cr.Site, cr.Project, cr.User,
-                   cr.InstanceId, cr.StartTime.to('utc').isoformat(), cr.EndTime.to('utc').isoformat(),
-                   cr.Duration, cr.Region, cr.Zone, cr.Flavour,
-                   cr.Cost, cr.AllocatedCPU, cr.AllocatedDisk,
-                   cr.AllocatedMemory, cr.UsedCPU, cr.UsedMemory,
-                   cr.UsedNetworkUp, cr.UsedNetworkDown, cr.IOPS)
-            ppr.pprint(tup)
-            c.execute('''INSERT INTO recs VALUES (
-                        ?, ?, ?, ?, ?,
-                        ?, ?, ?,
-                        ?, ?, ?, ?,
-                        ?, ?, ?,
-                        ?, ?, ?,
-                        ?, ?, ?)''', tup)
-
-        conn.commit()
-        """
-
 def main():
     opts, args = getopt.getopt(sys.argv[1:], "c:s")
 
@@ -599,22 +565,14 @@ def main():
 
     openstack = OpenStack(cfg)
     unused = MeterSet(openstack)
-    # ppr.pprint(unused.valid_meters_by_project)
-    # ppr.pprint(('valid meters by project', meters.valid_meters_by_project))
-
-    # Required: RecordIdentity, Site, Project, User, InstanceId, StartTime, EndTime,
-    #           Duration, Region, Zone, Flavour, Cost, AllocatedCPU, AllocatedDisk,
-    #           AllocatedMemory
-    # Optional: UsedCPU, UsedMemory, UsedNetworkUp, UsedNetworkDown, IOPS
 
     instance_measurements = populate_instances(openstack, period_start, period_end)
-    # ppr.pprint(('instance measurements', instance_measurements))
 
     identity_cache = IdentityCache(openstack)
     cloud_records = gather_cloud_records(openstack, cfg, instance_measurements, cost_definition, identity_cache)
     write_cloud_records(cfg, period_end, cloud_records)
 
     persistent_state.last_timepoint = period_end
-#    persistent_state.write()
+    persistent_state.write()
 
 main()
