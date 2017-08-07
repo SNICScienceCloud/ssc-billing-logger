@@ -534,15 +534,18 @@ def write_cloud_records(cfg, datetime_of_run, records):
         tree.write(f, encoding='unicode', xml_declaration=True)
 
 def main():
-    opts, args = getopt.getopt(sys.argv[1:], "c:s")
+    opts, args = getopt.getopt(sys.argv[1:], "c:ds")
 
     cfg_filename = None
     do_singlestep = False
+    dry_run = False
     for (k, v) in opts:
         if k == '-c':
             cfg_filename = v
         if k == '-s':
             do_singlestep = True
+        if k == '-d':
+            dry_run = True
     cfg = Config(cfg_filename)
 
     cost_definition = CostDefinition(cfg.region, cfg.datadir)
@@ -569,9 +572,11 @@ def main():
 
     identity_cache = IdentityCache(openstack)
     cloud_records = gather_cloud_records(openstack, cfg, instance_measurements, cost_definition, identity_cache)
-    write_cloud_records(cfg, period_end, cloud_records)
+    if not dry_run:
+        write_cloud_records(cfg, period_end, cloud_records)
 
     persistent_state.last_timepoint = period_end
-    persistent_state.write()
+    if not dry_run:
+        persistent_state.write()
 
 main()
