@@ -22,9 +22,9 @@ Compute instances are billed by instance flavour per hour. Block storage is bill
 Cron jobs
 =========
 
-    10 * * * * /usr/bin/python3 /usr/local/share/ssc-billing-logger/fetch-deleted-volumes.sh > /var/spool/sgas-cr/logger-state/deleted-volumes.tsv
-    15 * * * * /usr/bin/python3 /usr/local/share/ssc-billing-logger/ssc-billing-logger.py -c /usr/local/share/ssc-billing-logger/ssc-billing-logger.conf
-    0  * * * * /usr/local/share/sgas-cr-registrant/bin/sgas-cr-registrant -c /usr/local/share/sgas-cr-registrant/etc/sgas-cr-registrant.conf
+    10 * * * * /usr/bin/python3 /opt/ssc-billing-logger/fetch-deleted-volumes.sh > /spool/sgas-cr/logger-state/deleted-volumes.tsv
+    15 * * * * /usr/bin/python3 /opt/ssc-billing-logger/ssc-billing-logger.py -c /opt/ssc-billing-logger/ssc-billing-logger.conf
+    0  * * * * /opt/sgas-cr-registrant/bin/sgas-cr-registrant -c /opt/sgas-cr-registrant/etc/sgas-cr-registrant.conf
 
 Usage
 =====
