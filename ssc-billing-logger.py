@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import arrow
+import csv
 import getopt
 import itertools
 import json
@@ -87,6 +88,20 @@ class PersistentState:
         with open(self.state_filename, 'w') as f:
             json.dump(out, f)
 
+class DeletedVolumes:
+    def __init__(self, dirname):
+        state_filename = os.path.join(dirname, "logger-state/deleted-volumes.tsv")
+        try:
+            self.deleted_at = {}
+            with open(state_filename, 'r') as file:
+                file = csv.reader(file, delimiter='\t')
+                for row in file:
+                    self.deleted_at[row[0]] = arrow.get(row[1])
+        except FileNotFoundError:
+            pass
+
+    def volume_deletion_time(self, id):
+        return self.deleted_at.get(id, None)
 
 CR_NAMESPACE = "http://sams.snic.se/namespaces/2016/04/cloudrecords"
 CLOUD_COMPUTE_RECORD = ET.QName("{%s}CloudComputeRecord" % CR_NAMESPACE)
@@ -451,7 +466,7 @@ class IdentityCache:
             self.users[user_id] = res
             return res
 
-def gather_cloud_records(openstack, cfg, instance_measurements, cost_definition, identity_cache):
+def gather_cloud_records(openstack, cfg, instance_measurements, cost_definition, identity_cache, deleted_volumes):
     # Required: RecordIdentity, Site, Project, User, InstanceId, StartTime, EndTime, Duration, Region, Zone,
     #           Flavour, Cost, AllocatedCPU, AllocatedDisk, AllocatedMemory
     # Optional: UsedCPU, UsedMemory, UsedNetworkUp, UsedNetworkDown, IOPS
@@ -467,6 +482,7 @@ def gather_cloud_records(openstack, cfg, instance_measurements, cost_definition,
 
     num_compute = 0
     num_storage = 0
+    num_deleted = 0
     crs = []
     for rid, inst in instance_measurements.items():
         uid = inst['UserId']
@@ -481,6 +497,11 @@ def gather_cloud_records(openstack, cfg, instance_measurements, cost_definition,
             ppr.pprint((pid, proj))
             next
 
+        deletion_time = deleted_volumes.volume_deletion_time(inst['ResourceId'])
+        if deletion_time is not None and deletion_time < inst['StartTime']:
+            num_deleted = num_deleted + 1
+            continue
+
         try:
             if 'AllocatedCPU' in inst and 'AllocatedMemory' in inst:
                 num_compute = num_compute + 1
@@ -490,13 +511,16 @@ def gather_cloud_records(openstack, cfg, instance_measurements, cost_definition,
                 cr.Cost = cost_definition.lookup_compute(flavor_name)
                 cr.AllocatedCPU = inst['AllocatedCPU']
                 cr.AllocatedMemory = inst['AllocatedMemory']
-            else:
+            elif 'AllocatedDisk' in inst:
                 num_storage = num_storage + 1
                 gigabytes = inst['AllocatedDisk']
                 cr = StorageRecord(cfg)
                 cr.StorageType = 'Block'
                 cr.Cost = cost_definition.lookup_block_storage(gigabytes)
                 cr.AllocatedDisk = int(gigabytes * 2**30)
+            else:
+                ppr.pprint(inst)
+                raise Exception("Instance not valid compute nor storage, may be solved by restart.")
 
             cr.Project = proj['project']['name']
             cr.User = user['user']['name']
@@ -513,6 +537,7 @@ def gather_cloud_records(openstack, cfg, instance_measurements, cost_definition,
             raise
 
     ppr.pprint('%d cloudrecords: %d compute, %d storage' % (len(crs), num_compute, num_storage))
+    ppr.pprint('%d omitted records of deleted volumes' % (num_deleted,))
 
     return crs
 
@@ -550,6 +575,7 @@ def main():
 
     cost_definition = CostDefinition(cfg.region, cfg.datadir)
     persistent_state = PersistentState(cfg.datadir)
+    deleted_volumes = DeletedVolumes(cfg.datadir)
 
     last_full_report_timepoint = persistent_state.last_timepoint
     if last_full_report_timepoint is None:
@@ -571,7 +597,7 @@ def main():
     instance_measurements = populate_instances(openstack, period_start, period_end)
 
     identity_cache = IdentityCache(openstack)
-    cloud_records = gather_cloud_records(openstack, cfg, instance_measurements, cost_definition, identity_cache)
+    cloud_records = gather_cloud_records(openstack, cfg, instance_measurements, cost_definition, identity_cache, deleted_volumes)
     if not dry_run:
         write_cloud_records(cfg, period_end, cloud_records)
 
