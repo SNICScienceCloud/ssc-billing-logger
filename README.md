@@ -30,3 +30,7 @@ Usage
 =====
 * -c config.conf -- override the configuration file location
 * -s -- run for a single hour instead of the full period since last reporting period.
+
+Notes
+=====
+`fetch-deleted-volumes.sh` currently retrieves two weeks of deletion history, as Ceilometer typically is configured with a week of retention. If the site has a longer Ceilometer retention period, adjust the interval accordingly.
