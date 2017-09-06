@@ -30,14 +30,15 @@ class Config:
             self.keystone_url = cfg['keystone_url']
             self.ceilometer_url = cfg['ceilometer_url']
             self.socks_proxy_url = cfg.get('socks_proxy_url', None)
-            self.site = cfg['site']
+            self.site = cfg.get('site', None)
+            self.resource = cfg['resource']
             self.region = cfg['region']
             self.datadir = cfg['datadir']
 
 
     def valid(self):
         return self.username is not None and self.password is not None and self.project is not None and self.domain is not None and \
-               self.keystone_url is not None and self.ceilometer_url is not None and self.datadir is not None
+               self.keystone_url is not None and self.ceilometer_url is not None and self.datadir is not None and self.resource is not None
 
 class CostDefinition:
     def __init__(self, region, dirname):
@@ -112,6 +113,7 @@ class CloudRecord:
     def __init__(self, cfg):
         self.RecordIdentity = None
         self.Site = cfg.site
+        self.Resource = cfg.resource
         self.Project = None
         self.User = None
         self.InstanceId = None
@@ -196,6 +198,7 @@ class ComputeRecord(CloudRecord):
         CloudRecord.add_sub_element(root, 'EndTime', self.EndTime.to('utc').isoformat())
         CloudRecord.add_sub_element(root, 'Duration', self.Duration)
         CloudRecord.add_sub_element(root, 'Region', self.Region)
+        CloudRecord.add_sub_element(root, 'Resource', self.Resource)
         CloudRecord.add_sub_element(root, 'Zone', self.Zone)
         CloudRecord.add_sub_element(root, 'Flavour', self.Flavour)
         CloudRecord.add_sub_element_with_default(root, 'Cost', self.Cost)
@@ -237,6 +240,7 @@ class StorageRecord(CloudRecord):
         CloudRecord.add_sub_element(root, 'EndTime', self.EndTime.to('utc').isoformat())
         CloudRecord.add_sub_element(root, 'Duration', self.Duration)
         CloudRecord.add_sub_element(root, 'Region', self.Region)
+        CloudRecord.add_sub_element(root, 'Resource', self.Resource)
         CloudRecord.add_sub_element(root, 'Zone', self.Zone)
         CloudRecord.add_sub_element_with_default(root, 'Cost', self.Cost)
 
@@ -467,9 +471,9 @@ class IdentityCache:
             return res
 
 def gather_cloud_records(openstack, cfg, instance_measurements, cost_definition, identity_cache, deleted_volumes):
-    # Required: RecordIdentity, Site, Project, User, InstanceId, StartTime, EndTime, Duration, Region, Zone,
+    # Required: RecordIdentity, Project, User, InstanceId, StartTime, EndTime, Duration, Resource, Region, Zone,
     #           Flavour, Cost, AllocatedCPU, AllocatedDisk, AllocatedMemory
-    # Optional: UsedCPU, UsedMemory, UsedNetworkUp, UsedNetworkDown, IOPS
+    # Optional: Site, UsedCPU, UsedMemory, UsedNetworkUp, UsedNetworkDown, IOPS
 
     flavors = {}
 
