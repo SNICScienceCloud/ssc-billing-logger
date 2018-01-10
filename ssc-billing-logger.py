@@ -59,7 +59,7 @@ class CostDefinition:
         try:
             return self.flavor_costs[flavor_name]
         except KeyError:
-            sys.stderr.write('Cost requested for flavour %s which is not defined\n' % (flavour_name,))
+            sys.stderr.write('Cost requested for flavour %s which is not defined\n' % (flavor_name,))
             return 0.0
 
     def lookup_block_storage(self, gigabytes):
@@ -583,7 +583,7 @@ def main():
 
     last_full_report_timepoint = persistent_state.last_timepoint
     if last_full_report_timepoint is None:
-        last_full_report_timepoint = arrow.get('2015-01-01T00:00Z')
+        last_full_report_timepoint = arrow.utcnow().replace(weeks=-3).floor('hour')
 
     period_start = last_full_report_timepoint
     period_end = arrow.utcnow().floor('hour')
@@ -594,6 +594,10 @@ def main():
         if period_end < succ:
             return
         period_end = succ
+    else:
+        succ = period_start.replace(hours=+24)
+        if succ < period_end:
+            period_end = succ
 
     openstack = OpenStack(cfg)
     unused = MeterSet(openstack)
