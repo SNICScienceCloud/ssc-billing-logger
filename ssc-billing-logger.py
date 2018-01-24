@@ -324,6 +324,7 @@ class MeterSet:
         meters = json.loads(ar.text)
         if len(meters) == 0:
             sys.stderr.write("[W1000] Ceilometer meters collection is empty, services may need restarting\n");
+        meters = [m for m in meters if m['project_id'] is not None]
 
         self.resource_infos = {}
         for meter in meters:
