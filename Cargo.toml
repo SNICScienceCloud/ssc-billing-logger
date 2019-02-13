@@ -1,0 +1,11 @@
+[package]
+name = "ssc-billing-logger"
+version = "0.1.0"
+authors = ["Lars Viklund <zao@zao.se>"]
+edition = "2018"
+
+[dependencies]
+chrono = "0.4"
+failure = "0.1"
+rust_decimal = "0.11"
+xml-rs = "0.8"
