@@ -132,7 +132,7 @@ pub mod v1 {
                 cost: Decimal::from_str("0.125").unwrap(),
                 allocated_disk: 0,
             };
-            
+
             CloudComputeRecord {
                 common,
                 flavour: "ssc.small".to_owned(),
@@ -159,7 +159,9 @@ pub mod v1 {
                         "cr:recordId",
                         &format!(
                             "ssc/{}/cr/{}/{}",
-                            common.site, common.instance_id, common.end_time.timestamp()
+                            common.site,
+                            common.instance_id,
+                            common.end_time.timestamp()
                         ),
                     ),
             )?;
@@ -252,7 +254,9 @@ pub mod v1 {
                         "cr:recordId",
                         &format!(
                             "ssc/{}/cr/{}/{}",
-                            common.site, common.instance_id, common.end_time.timestamp()
+                            common.site,
+                            common.instance_id,
+                            common.end_time.timestamp()
                         ),
                     ),
             )?;
@@ -277,5 +281,34 @@ pub mod v1 {
 
             Ok(())
         }
+    }
+
+    pub fn write_xml_to<'a, W, ComputeIter, StorageIter>(
+        writer: W,
+        computes: ComputeIter,
+        storages: StorageIter,
+    ) -> Result<(), failure::Error>
+    where
+        W: Write,
+        ComputeIter: IntoIterator<Item = &'a CloudComputeRecord>,
+        StorageIter: IntoIterator<Item = &'a CloudStorageRecord>,
+    {
+        use xml::writer::{EmitterConfig, XmlEvent};
+        let mut w = EmitterConfig::new()
+            .perform_indent(true)
+            .create_writer(writer);
+
+        w.write(
+            XmlEvent::start_element("cr:CloudRecords")
+                .ns("cr", "http://sams.snic.se/namespaces/2016/04/cloudrecords"),
+        )?;
+        for cr in computes {
+            cr.write_to(&mut w)?;
+        }
+        for sr in storages {
+            sr.write_to(&mut w)?;
+        }
+        w.write(XmlEvent::end_element())?;
+        Ok(())
     }
 }

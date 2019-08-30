@@ -152,15 +152,15 @@ impl Session {
             .get(&("glance", "image"))
             .ok_or(format_err!("Could not find Glance endpoint"))?
             .clone();
-        let mut swift_url = region_endpoints
-            .get(&("swiftv1", "object-store"))
-            .cloned();
+        let mut swift_url = region_endpoints.get(&("swiftv1", "object-store")).cloned();
 
         if rewrite_host {
             for url in [&mut nova_url, &mut cinder_url, &mut glance_url].iter_mut() {
                 url.set_host(Some("localhost"))?;
             }
-            swift_url.as_mut().map(|url| url.set_host(Some("localhost")));
+            swift_url
+                .as_mut()
+                .map(|url| url.set_host(Some("localhost")));
         }
 
         Ok(Session {
@@ -513,7 +513,8 @@ pub mod swift {
 }
 
 impl Session {
-    fn fetch_container_set(&self, 
+    fn fetch_container_set(
+        &self,
         client: &reqwest::Client,
         url: &url::Url,
     ) -> Result<Vec<swift::Container>, failure::Error> {
@@ -559,8 +560,7 @@ impl Session {
             }
 
             Ok(ret)
-        }
-        else {
+        } else {
             Ok(vec![])
         }
     }

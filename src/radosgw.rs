@@ -27,7 +27,7 @@ pub mod admin {
         pub size_kb_actual: u64,
         pub num_objects: u64,
     }
-    
+
     #[derive(Debug, Deserialize)]
     pub struct BucketStatsBucketQuota {
         pub enabled: bool,
