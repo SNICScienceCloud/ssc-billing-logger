@@ -1,18 +1,17 @@
 use ::ssc_billing_logger::openstack;
-use ::ssc_billing_logger::records;
 use ::ssc_billing_logger::radosgw;
-use chrono::Timelike;
+use ::ssc_billing_logger::records;
 
 #[macro_use]
 extern crate failure;
 
-use chrono::Utc;
+use chrono::{DateTime, Timelike, Utc};
 use num::Zero;
 use rust_decimal::Decimal;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 // use std::str::FromStr;
 use structopt::StructOpt;
 use url::Url;
@@ -66,19 +65,64 @@ enum BillingCategory {
 impl BillingCategory {
     fn from_status(s: &str) -> BillingCategory {
         match s {
-            "PAUSED" | "SUSPENDED" | "SOFT_SUSPENDED" | "SOFT_DELETED" | "SHUTOFF" => BillingCategory::Inactive,
+            "PAUSED" | "SUSPENDED" | "SOFT_SUSPENDED" | "SOFT_DELETED" | "SHUTOFF" => {
+                BillingCategory::Inactive
+            }
             "DELETED" | "SHELVED" | "SHELVED_OFFLOADED" => BillingCategory::Unbilled,
             _ => BillingCategory::Active,
         }
     }
 }
 
+#[derive(Debug, Deserialize, Serialize, Default)]
+struct PersistentState {
+    last_timepoint: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug)]
+struct PersistentStateFile {
+    filename: PathBuf,
+    state: PersistentState,
+}
+
+impl PersistentStateFile {
+    fn open<P: Into<PathBuf>>(datadir: P) -> Result<PersistentStateFile, failure::Error> {
+        let filename = datadir.into().join("logger-state/state.json");
+        let fh = File::open(&filename);
+        let state = fh
+            .ok()
+            .and_then(|fh| serde_json::from_reader(fh).ok())
+            .unwrap_or_default();
+        Ok(PersistentStateFile { filename, state })
+    }
+
+    fn write(&self) -> Result<(), failure::Error> {
+        let contents = serde_json::to_vec_pretty(&self.state)?;
+        std::fs::write(&self.filename, &contents)?;
+        Ok(())
+    }
+}
+
 fn main() -> Result<(), failure::Error> {
     let opt = Opt::from_args();
     let cfg: Config = serde_json::from_reader(File::open(&opt.config)?)?;
-    let datadir: PathBuf = cfg.datadir.into();
+    let datadir = PathBuf::from(&cfg.datadir);
+    let mut persistent_state = PersistentStateFile::open(&cfg.datadir)?;
     let costs: Costs =
         serde_json::from_reader(File::open(&datadir.join("logger-state/costs.json"))?)?;
+
+    let region_costs = costs
+        .regions
+        .get(&cfg.region)
+        .ok_or(format_err!("Region {} not found in costs.json", cfg.region))?;
+
+    let now = Utc::now();
+    let this_run_datetime = now.date().and_hms(now.hour(), 0, 0);
+    if let Some(last_run) = persistent_state.state.last_timepoint {
+        if last_run == this_run_datetime {
+            return Ok(());
+        }
+    }
 
     let credentials = openstack::Credentials {
         username: cfg.username,
@@ -93,24 +137,34 @@ fn main() -> Result<(), failure::Error> {
         &cfg.region,
         opt.rewrite_host,
     )?;
-    eprintln!("Session: {:#?}", session);
-    // eprintln!("Identity URL: {:?}", session.keystone_url);
-    // eprintln!("Compute URL: {:?}", session.nova_url);
-    // eprintln!("Image URL: {:?}", session.glance_url);
-    // eprintln!("Volume URL: {:?}", session.cinder_url);
 
     let servers = session.servers()?;
     let flavors = session.flavors()?;
     let images = session.images()?;
     let volumes = session.volumes()?;
-    // TODO: Implement object storage stuff
-    // let object_buckets = session.buckets()?;
+    let object_bucket_stats = radosgw::admin::bucket_stats();
 
     let users = session.user_mappings()?;
     let projects = session.project_mappings()?;
 
-    eprintln!("{:?}", servers.len());
-    eprintln!("{:#?}", &servers[0]);
+    let mut object_bucket_costs = HashMap::new();
+    if let Ok(stats) = &object_bucket_stats {
+        let gig_rate = region_costs
+            .get("storage.object")
+            .cloned()
+            .unwrap_or(0u32.into());
+        let kb_to_gb = Decimal::from(1u32) / Decimal::from(1024u32.pow(2));
+        for s in stats {
+            if !s.usage.is_empty() {
+                let gb_sum = s.usage.iter().fold(Decimal::from(0u32), |sum, u| {
+                    sum + Decimal::from(u.1.size_kb) * kb_to_gb
+                });
+                let cost = gig_rate * gb_sum;
+                object_bucket_costs.insert(s.id.clone(), (cost, s));
+            }
+        }
+    }
+    eprintln!("{:?}", object_bucket_costs);
 
     let start_time = Utc::now()
         .with_minute(0)
@@ -122,11 +176,6 @@ fn main() -> Result<(), failure::Error> {
     let duration = chrono::Duration::hours(1);
     let end_time = start_time + duration;
 
-    let region_costs = costs
-        .regions
-        .get(&cfg.region)
-        .ok_or(format_err!("Region {} not found in costs.json", cfg.region))?;
-
     // Operator test project - "SNIC 2018/10-1"
     let op_servers = servers
         .iter()
@@ -134,7 +183,13 @@ fn main() -> Result<(), failure::Error> {
 
     let mut used_os_volume_discount: HashMap<String, u64> = HashMap::new();
 
-    let mut categorized_server_costs_by_project: HashMap<BillingCategory, HashMap<String, Vec<(Decimal, &openstack::nova::Server)>>> = HashMap::new();
+    let mut categorized_server_costs_by_project: HashMap<
+        BillingCategory,
+        HashMap<String, Vec<(Decimal, &openstack::nova::Server)>>,
+    > = HashMap::new();
+
+    let mut v1_compute_records: Vec<records::v1::CloudComputeRecord> = Vec::new();
+    let mut v1_storage_records: Vec<records::v1::CloudStorageRecord> = Vec::new();
 
     for server in &servers {
         use openstack::nova;
@@ -163,10 +218,12 @@ fn main() -> Result<(), failure::Error> {
 
             let billing_category = BillingCategory::from_status(server.status.as_ref());
 
-            categorized_server_costs_by_project.entry(billing_category).or_default()
-            .entry(server.tenant_id.clone())
-            .or_default()
-            .push((cost, server));
+            categorized_server_costs_by_project
+                .entry(billing_category)
+                .or_default()
+                .entry(server.tenant_id.clone())
+                .or_default()
+                .push((cost, server));
 
             if volume_backed {
                 used_os_volume_discount.insert(server.attached_volumes[0].id.clone(), flavor.disk);
@@ -206,8 +263,7 @@ fn main() -> Result<(), failure::Error> {
                     used_network_down: None,
                     iops: None,
                 };
-                // let cr = records::CloudComputeRecord::example();
-                // eprintln!("cr: {:?}", cr);
+                v1_compute_records.push(cr);
             }
         }
     }
@@ -258,7 +314,10 @@ fn main() -> Result<(), failure::Error> {
         for (proj, server_costs) in category.iter() {
             let costs = server_costs.iter().map(|c| c.0).collect::<Vec<Decimal>>();
             let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
-            eprintln!("proj: {}; active server costs: {:.5} = sum({:.5?})", proj, total_cost, costs);
+            eprintln!(
+                "proj: {}; active server costs: {:.5} = sum({:.5?})",
+                proj, total_cost, costs
+            );
             project_breakdowns
                 .entry(proj.clone())
                 .or_default()
@@ -271,7 +330,10 @@ fn main() -> Result<(), failure::Error> {
         for (proj, server_costs) in category.iter() {
             let costs = server_costs.iter().map(|c| c.0).collect::<Vec<Decimal>>();
             let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
-            eprintln!("proj: {}; inactive server costs: {:.5} = sum({:.5?})", proj, total_cost, costs);
+            eprintln!(
+                "proj: {}; inactive server costs: {:.5} = sum({:.5?})",
+                proj, total_cost, costs
+            );
             project_breakdowns
                 .entry(proj.clone())
                 .or_default()
@@ -284,7 +346,10 @@ fn main() -> Result<(), failure::Error> {
         for (proj, server_costs) in category.iter() {
             let costs = server_costs.iter().map(|c| c.0).collect::<Vec<Decimal>>();
             let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
-            eprintln!("proj: {}; unbilled server costs: {:.5} = sum({:.5?})", proj, total_cost, costs);
+            eprintln!(
+                "proj: {}; unbilled server costs: {:.5} = sum({:.5?})",
+                proj, total_cost, costs
+            );
             project_breakdowns
                 .entry(proj.clone())
                 .or_default()
@@ -296,7 +361,10 @@ fn main() -> Result<(), failure::Error> {
     for (proj, volume_costs) in volume_costs_by_project.iter() {
         let costs = volume_costs.iter().map(|c| c.0).collect::<Vec<Decimal>>();
         let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
-        eprintln!("proj: {}; volume costs: {:.5} = sum({:.5?})", proj, total_cost, costs);
+        eprintln!(
+            "proj: {}; volume costs: {:.5} = sum({:.5?})",
+            proj, total_cost, costs
+        );
         project_breakdowns
             .entry(proj.clone())
             .or_default()
@@ -307,13 +375,24 @@ fn main() -> Result<(), failure::Error> {
     for (proj, image_costs) in image_costs_by_project.iter() {
         let costs = image_costs.iter().map(|c| c.0).collect::<Vec<Decimal>>();
         let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
-        eprintln!("proj: {}; image costs: {:.5} = sum({:.5?})", proj, total_cost, costs);
+        eprintln!(
+            "proj: {}; image costs: {:.5} = sum({:.5?})",
+            proj, total_cost, costs
+        );
         project_breakdowns
             .entry(proj.clone())
             .or_default()
             .images
             .extend(image_costs.iter());
     }
+
+    let xml_leaf_name = format!("records/{}.xml", this_run_datetime.format("%FT%TZ"));
+    let xml_filename = PathBuf::from(cfg.datadir).join(xml_leaf_name);
+    let fh = std::fs::File::create(xml_filename)?;
+    records::v1::write_xml_to(fh, v1_compute_records.iter(), v1_storage_records.iter())?;
+
+    persistent_state.state.last_timepoint = Some(this_run_datetime);
+    persistent_state.write()?;
 
     Ok(())
 }
