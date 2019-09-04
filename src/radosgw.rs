@@ -1,7 +1,6 @@
 extern crate failure;
 
 pub mod admin {
-    use chrono::{DateTime, Utc};
     use serde::Deserialize;
     use std::collections::HashMap;
 
@@ -54,7 +53,6 @@ mod tests {
     use chrono::{DateTime, Utc};
     use serde; // 1.0.88
     use serde::Deserialize;
-    use serde_json; // 1.0.38
 
     #[derive(Debug, Deserialize)]
     pub struct Foo {
@@ -63,6 +61,6 @@ mod tests {
 
     #[test]
     fn read_bucket_infos() {
-        let infos = admin::bucket_stats().unwrap();
+        let _infos = admin::bucket_stats().unwrap();
     }
 }
