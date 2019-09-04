@@ -9,9 +9,9 @@ use chrono::{DateTime, Timelike, Utc};
 use num::Zero;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 // use std::str::FromStr;
 use structopt::StructOpt;
 use url::Url;
@@ -32,8 +32,6 @@ pub struct Config {
     password: String,
     domain: String,
     project: String,
-
-    #[serde(with = "url_serde")]
     keystone_url: Url,
 
     site: String,
@@ -102,6 +100,10 @@ impl PersistentStateFile {
         Ok(())
     }
 }
+
+const DEFAULT_USER: &str = "default";
+const DEFAULT_PROJECT: &str = "default";
+const DEFAULT_ZONE: &str = "default";
 
 fn main() -> Result<(), failure::Error> {
     let opt = Opt::from_args();
@@ -177,7 +179,7 @@ fn main() -> Result<(), failure::Error> {
     let end_time = start_time + duration;
 
     // Operator test project - "SNIC 2018/10-1"
-    let op_servers = servers
+    let _op_servers = servers
         .iter()
         .filter(|srv| srv.tenant_id == "7d4b838241d9486e972bf1b371cc8718");
 
@@ -236,7 +238,7 @@ fn main() -> Result<(), failure::Error> {
                 let allocated_cpu: Decimal = flavor.vcpus.into();
                 let allocated_memory = flavor.ram;
 
-                use records::v1::{CloudComputeRecord, CloudRecordCommon, CloudStorageRecord};
+                use records::v1::{CloudComputeRecord, CloudRecordCommon};
 
                 let cr = CloudComputeRecord {
                     common: CloudRecordCommon {
@@ -277,12 +279,43 @@ fn main() -> Result<(), failure::Error> {
             .cloned()
             .unwrap_or(0u32.into());
         let discount = used_os_volume_discount.get(&volume.id).unwrap_or(&0);
-        let gigs = volume.size.saturating_sub(*discount);
-        let cost = Decimal::from(gigs) * gig_rate;
+        let actual_gigs = volume.size;
+        let discount_gigs = volume.size.saturating_sub(*discount);
+        let cost = Decimal::from(discount_gigs) * gig_rate;
         volume_costs_by_project
             .entry(volume.tenant_id.clone())
             .or_default()
             .push((cost, volume));
+
+        let user = users.get(&volume.user_id);
+        let project = projects.get(&volume.tenant_id);
+
+        let create_time = Utc::now();
+        let allocated_disk = actual_gigs * 1024u64.pow(3);
+
+        if let (Some(user), Some(project)) = (user, project) {
+            use records::v1::{CloudRecordCommon, CloudStorageRecord};
+            let sr = CloudStorageRecord {
+                common: CloudRecordCommon {
+                    create_time: create_time,
+                    site: cfg.site.clone(),
+                    project,
+                    user,
+                    instance_id: volume.id.clone(),
+                    start_time,
+                    end_time,
+                    duration,
+                    region: cfg.region.clone(),
+                    resource: cfg.resource.clone(),
+                    zone: volume.availability_zone.clone(),
+                    cost,
+                    allocated_disk,
+                },
+                file_count: 0,
+                storage_type: "Block".to_owned(),
+            };
+            v1_storage_records.push(sr);
+        }
     }
 
     let mut image_costs_by_project: HashMap<String, Vec<(Decimal, &openstack::glance::Image)>> =
@@ -299,6 +332,36 @@ fn main() -> Result<(), failure::Error> {
                 .entry(owner.clone())
                 .or_default()
                 .push((cost, image));
+
+            let user = users.get(&image.user_id.as_ref().unwrap_or(&DEFAULT_USER.to_owned()));
+            let project = projects.get(&image.owner_id.as_ref().or(image.owner.as_ref()).unwrap_or(&DEFAULT_PROJECT.to_owned()));
+
+            let create_time = Utc::now();
+            let allocated_disk = bytes;
+
+            if let (Some(user), Some(project)) = (user, project) {
+                use records::v1::{CloudRecordCommon, CloudStorageRecord};
+                let sr = CloudStorageRecord {
+                    common: CloudRecordCommon {
+                        create_time: create_time,
+                        site: cfg.site.clone(),
+                        project,
+                        user,
+                        instance_id: image.id.clone(),
+                        start_time,
+                        end_time,
+                        duration,
+                        region: cfg.region.clone(),
+                        resource: cfg.resource.clone(),
+                        zone: DEFAULT_ZONE.to_owned(),
+                        cost,
+                        allocated_disk,
+                    },
+                    file_count: 0,
+                    storage_type: "Block".to_owned(),
+                };
+                v1_storage_records.push(sr);
+            }
         }
     }
 

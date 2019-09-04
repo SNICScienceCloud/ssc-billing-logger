@@ -193,13 +193,13 @@ pub mod cinder {
 
         #[serde(rename = "os-vol-tenant-attr:tenant_id")]
         pub tenant_id: String,
+
+        pub availability_zone: String,
     }
 
     #[derive(Debug, Deserialize)]
     pub struct Link {
         pub rel: String,
-
-        #[serde(with = "url_serde")]
         pub href: url::Url,
     }
 }
@@ -342,7 +342,6 @@ impl Session {
 pub mod glance {
     use chrono::{DateTime, Utc};
     use serde::Deserialize;
-    use std::collections::HashMap;
 
     #[derive(Debug, Deserialize, Clone)]
     pub struct Images {
@@ -372,6 +371,8 @@ pub mod glance {
         pub visibility: String,
         pub direct_url: Option<String>,
         pub locations: Vec<serde_json::Value>,
+        pub owner_id: Option<String>,
+        pub user_id: Option<String>,
     }
 }
 
@@ -534,6 +535,7 @@ impl Session {
         Ok(containers)
     }
 
+    #[allow(unreachable_code, unused_variables)]
     pub fn containers(&self, project: &str) -> Result<Vec<swift::Container>, failure::Error> {
         return Ok(vec![]);
 

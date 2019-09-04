@@ -207,13 +207,13 @@ pub mod v1 {
 
     #[derive(Debug)]
     pub struct CloudStorageRecord {
-        common: CloudRecordCommon,
+        pub common: CloudRecordCommon,
 
         // <cr:StorageType>Block</cr:StorageType>
-        storage_type: String,
+        pub storage_type: String,
 
         // <cr:FileCount>0</cr:FileCount>
-        file_count: u64,
+        pub file_count: u64,
     }
 
     impl CloudStorageRecord {
@@ -293,7 +293,7 @@ pub mod v1 {
         ComputeIter: IntoIterator<Item = &'a CloudComputeRecord>,
         StorageIter: IntoIterator<Item = &'a CloudStorageRecord>,
     {
-        use xml::writer::{EmitterConfig, XmlEvent};
+        use xml::writer::EmitterConfig;
         let mut w = EmitterConfig::new()
             .perform_indent(true)
             .create_writer(writer);
