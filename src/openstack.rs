@@ -1,6 +1,7 @@
 extern crate failure;
 extern crate serde_json;
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use url::Url;
 
@@ -14,19 +15,19 @@ pub struct Session {
     swift_url: Option<Url>,
 }
 
-mod keystone {
-    use serde::Deserialize;
-    #[derive(Debug, Deserialize)]
+pub mod keystone {
+    use serde::{Deserialize, Serialize};
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct TokenInfo {
         pub token: Token,
     }
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct Token {
         pub catalog: Vec<Service>,
     }
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct Service {
         pub name: String,
 
@@ -35,30 +36,30 @@ mod keystone {
         pub endpoints: Vec<Endpoint>,
     }
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct Endpoint {
         pub region: String,
         pub interface: String,
         pub url: String,
     }
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct Users {
         pub users: Vec<User>,
     }
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct User {
         pub id: String,
         pub name: String,
     }
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct Projects {
         pub projects: Vec<Project>,
     }
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct Project {
         pub id: String,
         pub name: String,
@@ -175,7 +176,7 @@ impl Session {
 }
 
 pub mod cinder {
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Deserialize)]
     pub struct Volumes {
@@ -185,7 +186,7 @@ pub mod cinder {
         pub links: Vec<Link>,
     }
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct Volume {
         pub id: String,
         pub size: u64,
@@ -197,7 +198,7 @@ pub mod cinder {
         pub availability_zone: String,
     }
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct Link {
         pub rel: String,
         pub href: url::Url,
@@ -247,7 +248,7 @@ impl Session {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct NameMapping {
     id_to_name: HashMap<String, String>,
 }
@@ -258,8 +259,7 @@ impl NameMapping {
     }
 }
 
-type Flavors = HashMap<String, nova::Flavor>;
-pub struct FlavorCollection {}
+pub type Flavors = HashMap<String, nova::Flavor>;
 
 impl Session {
     fn users(&self) -> Result<keystone::Users, failure::Error> {
@@ -341,16 +341,16 @@ impl Session {
 
 pub mod glance {
     use chrono::{DateTime, Utc};
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, Deserialize, Clone)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct Images {
         pub images: Vec<Image>,
 
         pub next: Option<String>,
     }
 
-    #[derive(Debug, Deserialize, Clone)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct Image {
         pub container_format: Option<String>,
         pub created_at: DateTime<Utc>,
@@ -419,14 +419,14 @@ impl Session {
 }
 
 pub mod nova {
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, Deserialize, Clone)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct Servers {
         pub servers: Vec<Server>,
     }
 
-    #[derive(Debug, Deserialize, Clone)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct Server {
         pub id: String,
         pub user_id: String,
@@ -442,29 +442,29 @@ pub mod nova {
         pub attached_volumes: Vec<AttachedVolume>,
     }
 
-    #[derive(Debug, Deserialize, Clone)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     #[serde(untagged)]
     pub enum Image {
         StringRep(String),
         ObjectRep { id: String },
     }
 
-    #[derive(Debug, Deserialize, Clone)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct AttachedVolume {
         pub id: String,
     }
 
-    #[derive(Debug, Deserialize, Clone)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct ServerFlavor {
         pub id: String,
     }
 
-    #[derive(Debug, Deserialize, Clone)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct Flavors {
         pub flavors: Vec<Flavor>,
     }
 
-    #[derive(Debug, Deserialize, Clone)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct Flavor {
         pub id: String,
         pub name: String,
@@ -502,9 +502,9 @@ impl Session {
 
 pub mod swift {
     use chrono::{DateTime, Utc};
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct Container {
         pub count: u64,
         pub bytes: u64,

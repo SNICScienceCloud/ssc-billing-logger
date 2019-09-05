@@ -1,10 +1,10 @@
 extern crate failure;
 
 pub mod admin {
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct BucketStats {
         pub bucket: String,
         pub pool: String,
@@ -20,14 +20,14 @@ pub mod admin {
         pub bucket_quota: BucketStatsBucketQuota,
     }
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct BucketStatsUsage {
         pub size_kb: u64,
         pub size_kb_actual: u64,
         pub num_objects: u64,
     }
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct BucketStatsBucketQuota {
         pub enabled: bool,
         pub max_size_kb: i64,
@@ -40,6 +40,7 @@ pub mod admin {
             .capture()?
             .stdout_str();
         eprintln!("{}", output);
+        std::fs::write("bucket_stats.json", &output).unwrap();
         let statses: Vec<BucketStats> = serde_json::from_str(&output)?;
         Ok(statses)
     }
@@ -52,9 +53,9 @@ mod tests {
     use chrono; // 0.4.6
     use chrono::{DateTime, Utc};
     use serde; // 1.0.88
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct Foo {
         pub mtime: DateTime<Utc>,
     }

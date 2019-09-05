@@ -6,7 +6,7 @@ use ::ssc_billing_logger::records;
 extern crate failure;
 
 use chrono::{DateTime, Timelike, Utc};
-use num::Zero;
+use num::{ToPrimitive, Zero};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -24,6 +24,15 @@ struct Opt {
 
     #[structopt(long)]
     rewrite_host: bool,
+
+    #[structopt(long, parse(from_os_str))]
+    save_snapshot: Option<PathBuf>,
+
+    #[structopt(long, parse(from_os_str))]
+    load_snapshot: Option<PathBuf>,
+
+    #[structopt(long)]
+    dry_run: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -105,6 +114,19 @@ const DEFAULT_USER: &str = "default";
 const DEFAULT_PROJECT: &str = "default";
 const DEFAULT_ZONE: &str = "default";
 
+#[derive(Debug, Serialize, Deserialize)]
+struct Snapshot {
+    version: usize,
+    datetime: DateTime<Utc>,
+    servers: Vec<openstack::nova::Server>,
+    flavors: openstack::Flavors,
+    images: Vec<openstack::glance::Image>,
+    volumes: Vec<openstack::cinder::Volume>,
+    object_bucket_stats: Option<Vec<radosgw::admin::BucketStats>>,
+    users: openstack::NameMapping,
+    projects: openstack::NameMapping,
+}
+
 fn main() -> Result<(), failure::Error> {
     let opt = Opt::from_args();
     let cfg: Config = serde_json::from_reader(File::open(&opt.config)?)?;
@@ -140,17 +162,41 @@ fn main() -> Result<(), failure::Error> {
         opt.rewrite_host,
     )?;
 
-    let servers = session.servers()?;
-    let flavors = session.flavors()?;
-    let images = session.images()?;
-    let volumes = session.volumes()?;
-    let object_bucket_stats = radosgw::admin::bucket_stats();
+    let snap = if let Some(snap_path) = opt.load_snapshot {
+        let snap: Snapshot =
+            serde_json::from_str(&std::fs::read_to_string(snap_path).unwrap()).unwrap();
+        snap
+    } else {
+        let servers = session.servers()?;
+        let flavors = session.flavors()?;
+        let images = session.images()?;
+        let volumes = session.volumes()?;
+        let object_bucket_stats = radosgw::admin::bucket_stats();
 
-    let users = session.user_mappings()?;
-    let projects = session.project_mappings()?;
+        let users = session.user_mappings()?;
+        let projects = session.project_mappings()?;
+
+        let snap = Snapshot {
+            version: 1,
+            datetime: this_run_datetime,
+            servers,
+            flavors,
+            images,
+            volumes,
+            object_bucket_stats: object_bucket_stats.ok(),
+            users,
+            projects,
+        };
+
+        if let Some(snap_path) = opt.save_snapshot {
+            std::fs::write(snap_path, &serde_json::to_string_pretty(&snap).unwrap()).unwrap();
+        }
+
+        snap
+    };
 
     let mut object_bucket_costs = HashMap::new();
-    if let Ok(stats) = &object_bucket_stats {
+    if let Some(stats) = &snap.object_bucket_stats {
         let gig_rate = region_costs
             .get("storage.object")
             .cloned()
@@ -162,7 +208,7 @@ fn main() -> Result<(), failure::Error> {
                     sum + Decimal::from(u.1.size_kb) * kb_to_gb
                 });
                 let cost = gig_rate * gb_sum;
-                object_bucket_costs.insert(s.id.clone(), (cost, s));
+                object_bucket_costs.insert(s.id.clone(), (cost, s, gb_sum));
             }
         }
     }
@@ -179,7 +225,8 @@ fn main() -> Result<(), failure::Error> {
     let end_time = start_time + duration;
 
     // Operator test project - "SNIC 2018/10-1"
-    let _op_servers = servers
+    let _op_servers = snap
+        .servers
         .iter()
         .filter(|srv| srv.tenant_id == "7d4b838241d9486e972bf1b371cc8718");
 
@@ -193,12 +240,12 @@ fn main() -> Result<(), failure::Error> {
     let mut v1_compute_records: Vec<records::v1::CloudComputeRecord> = Vec::new();
     let mut v1_storage_records: Vec<records::v1::CloudStorageRecord> = Vec::new();
 
-    for server in &servers {
+    for server in &snap.servers {
         use openstack::nova;
 
-        let user = users.get(&server.user_id);
-        let project = projects.get(&server.tenant_id);
-        let flavor = flavors.get(&server.flavor.id);
+        let user = snap.users.get(&server.user_id);
+        let project = snap.projects.get(&server.tenant_id);
+        let flavor = snap.flavors.get(&server.flavor.id);
 
         let image_backed = match &server.image {
             nova::Image::StringRep(x) => x != "",
@@ -273,7 +320,7 @@ fn main() -> Result<(), failure::Error> {
     let mut volume_costs_by_project: HashMap<String, Vec<(Decimal, &openstack::cinder::Volume)>> =
         HashMap::new();
 
-    for volume in &volumes {
+    for volume in &snap.volumes {
         let gig_rate = region_costs
             .get("storage.block")
             .cloned()
@@ -287,8 +334,8 @@ fn main() -> Result<(), failure::Error> {
             .or_default()
             .push((cost, volume));
 
-        let user = users.get(&volume.user_id);
-        let project = projects.get(&volume.tenant_id);
+        let user = snap.users.get(&volume.user_id);
+        let project = snap.projects.get(&volume.tenant_id);
 
         let create_time = Utc::now();
         let allocated_disk = actual_gigs * 1024u64.pow(3);
@@ -321,7 +368,7 @@ fn main() -> Result<(), failure::Error> {
     let mut image_costs_by_project: HashMap<String, Vec<(Decimal, &openstack::glance::Image)>> =
         HashMap::new();
 
-    for image in &images {
+    for image in &snap.images {
         let gig_rate = region_costs
             .get("storage.block")
             .cloned()
@@ -333,8 +380,16 @@ fn main() -> Result<(), failure::Error> {
                 .or_default()
                 .push((cost, image));
 
-            let user = users.get(&image.user_id.as_ref().unwrap_or(&DEFAULT_USER.to_owned()));
-            let project = projects.get(&image.owner_id.as_ref().or(image.owner.as_ref()).unwrap_or(&DEFAULT_PROJECT.to_owned()));
+            let user = snap
+                .users
+                .get(&image.user_id.as_ref().unwrap_or(&DEFAULT_USER.to_owned()));
+            let project = snap.projects.get(
+                &image
+                    .owner_id
+                    .as_ref()
+                    .or(image.owner.as_ref())
+                    .unwrap_or(&DEFAULT_PROJECT.to_owned()),
+            );
 
             let create_time = Utc::now();
             let allocated_disk = bytes;
@@ -365,8 +420,38 @@ fn main() -> Result<(), failure::Error> {
         }
     }
 
-    eprintln!("total images: {}", images.len());
-    eprintln!("total volumes: {}", volumes.len());
+    for (_, (cost, stat, gigs)) in &object_bucket_costs {
+        if let Some(project) = snap.projects.get(&stat.owner) {
+            let create_time = Utc::now();
+            let gb_to_b: Decimal = 1024u64.pow(3).into();
+            let bytes = gigs * gb_to_b;
+
+            use records::v1::{CloudRecordCommon, CloudStorageRecord};
+            let sr = CloudStorageRecord {
+                common: CloudRecordCommon {
+                    create_time: create_time,
+                    site: cfg.site.clone(),
+                    project,
+                    user: DEFAULT_USER.to_owned(),
+                    instance_id: stat.id.clone(),
+                    start_time,
+                    end_time,
+                    duration,
+                    region: cfg.region.clone(),
+                    resource: cfg.resource.clone(),
+                    zone: DEFAULT_ZONE.to_owned(),
+                    cost: *cost,
+                    allocated_disk: bytes.to_u64().unwrap(),
+                },
+                file_count: 0,
+                storage_type: "Block".to_owned(),
+            };
+            v1_storage_records.push(sr);
+        }
+    }
+
+    eprintln!("total images: {}", snap.images.len());
+    eprintln!("total volumes: {}", snap.volumes.len());
     eprintln!("used OS volumes: {}", used_os_volume_discount.len());
 
     // Group by instance status
