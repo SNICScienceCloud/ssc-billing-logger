@@ -1,8 +1,6 @@
-#[macro_use]
-extern crate failure;
-
-#[macro_use]
-extern crate serde_json;
+#[macro_use] extern crate failure;
+#[macro_use] extern crate log;
+#[macro_use] extern crate serde_json;
 
 pub mod openstack;
 pub mod radosgw;
@@ -20,7 +18,7 @@ pub mod records;
 
 //     let instance_id_rx = openstack::instances();
 //     while let Ok(id) = instance_id_rx.recv() {
-//         eprintln!("{:?}", id);
+//         trace!("{:?}", id);
 //     }
 
 //     let mut w = EmitterConfig::new()

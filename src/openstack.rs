@@ -112,7 +112,7 @@ impl Session {
             .post(keystone_url.join("auth/tokens/")?.as_str())
             .body(Session::auth_scoped_payload(&creds))
             .send()?;
-        eprintln!("{:?}", res);
+        trace!("{:?}", res);
         let admin_scoped_token: String = res
             .headers()
             .get("X-Subject-Token")
@@ -122,8 +122,8 @@ impl Session {
             .to_owned();
         let body = res.text()?;
         let token_info: keystone::TokenInfo = serde_json::from_str(&body)?;
-        eprintln!("{:#?}", token_info);
-        eprintln!("Admin scoped token: {}", admin_scoped_token);
+        trace!("{:#?}", token_info);
+        trace!("Admin scoped token: {}", admin_scoped_token);
 
         let region_endpoints = token_info
             .token
@@ -235,9 +235,9 @@ impl Session {
         loop {
             let mut volumes = self.fetch_volume_set(&client, &url)?;
             ret.append(&mut volumes.volumes);
-            eprintln!("{:#?}", volumes.links);
+            trace!("{:#?}", volumes.links);
             if let Some(next) = volumes.links.iter().find(|lnk| lnk.rel == "next") {
-                eprintln!("next: {}", next.href);
+                trace!("next: {}", next.href);
                 url = next.href.clone();
             } else {
                 break;
@@ -316,7 +316,7 @@ impl Session {
     pub fn flavors(&self) -> Result<Flavors, failure::Error> {
         let client = reqwest::Client::new();
         let url = self.nova_url.join("flavors/detail?is_public=None")?;
-        eprintln!("flavor url: {:?}", url);
+        trace!("flavor url: {:?}", url);
         let mut res = client
             .get(url.as_str())
             .header("X-Auth-Token", self.auth_token.as_str())
@@ -486,7 +486,7 @@ impl Session {
             .header("X-Auth-Token", self.auth_token.as_str())
             .send()?;
 
-        eprintln!("{:?}", &res);
+        trace!("{:?}", &res);
         if !res.status().is_success() {
             bail!("Could not retrieve instances from Keystone");
         }

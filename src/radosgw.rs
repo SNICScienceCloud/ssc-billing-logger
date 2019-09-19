@@ -39,7 +39,7 @@ pub mod admin {
             .args(&["bucket", "stats"])
             .capture()?
             .stdout_str();
-        eprintln!("{}", output);
+        trace!("{}", output);
         std::fs::write("bucket_stats.json", &output).unwrap();
         let statses: Vec<BucketStats> = serde_json::from_str(&output)?;
         Ok(statses)

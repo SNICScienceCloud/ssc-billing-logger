@@ -2,8 +2,8 @@ use ::ssc_billing_logger::openstack;
 use ::ssc_billing_logger::radosgw;
 use ::ssc_billing_logger::records;
 
-#[macro_use]
-extern crate failure;
+#[macro_use] extern crate failure;
+#[macro_use] extern crate log;
 
 use chrono::{DateTime, Timelike, Utc};
 use num::{ToPrimitive, Zero};
@@ -33,6 +33,9 @@ struct Opt {
 
     #[structopt(long)]
     dry_run: bool,
+
+    #[structopt(long)]
+    force: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -127,13 +130,121 @@ struct Snapshot {
     projects: openstack::NameMapping,
 }
 
+struct PerProjectInfo<'a> {
+    categorized_server_costs_by_project: HashMap<
+        BillingCategory,
+        HashMap<String, Vec<(Decimal, &'a openstack::nova::Server)>>,
+    >,
+    volume_costs_by_project: HashMap<String, Vec<(Decimal, &'a openstack::cinder::Volume)>>,
+    image_costs_by_project: HashMap<String, Vec<(Decimal, &'a openstack::glance::Image)>>,
+}
+
+impl<'a> PerProjectInfo<'a> {
+    fn new() -> Self {
+        Self {
+            categorized_server_costs_by_project: HashMap::new(),
+            volume_costs_by_project: HashMap::new(),
+            image_costs_by_project: HashMap::new(),
+        }
+    }
+}
+
+fn collate_breakdowns(ppi: &PerProjectInfo) {
+    // Group by instance status
+
+    let mut project_breakdowns: HashMap<String, ProjectBreakdown> = HashMap::new();
+
+    if let Some(category) = ppi.categorized_server_costs_by_project.get(&BillingCategory::Active) {
+        for (proj, server_costs) in category.iter() {
+            let costs = server_costs.iter().map(|c| c.0).collect::<Vec<Decimal>>();
+            let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
+            debug!(
+                "proj: {}; active server costs: {:.5} = sum({:.5?})",
+                proj, total_cost, costs
+            );
+            project_breakdowns
+                .entry(proj.clone())
+                .or_default()
+                .active
+                .extend(server_costs.iter());
+        }
+    }
+
+    if let Some(category) = ppi.categorized_server_costs_by_project.get(&BillingCategory::Inactive) {
+        for (proj, server_costs) in category.iter() {
+            let costs = server_costs.iter().map(|c| c.0).collect::<Vec<Decimal>>();
+            let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
+            debug!(
+                "proj: {}; inactive server costs: {:.5} = sum({:.5?})",
+                proj, total_cost, costs
+            );
+            project_breakdowns
+                .entry(proj.clone())
+                .or_default()
+                .inert
+                .extend(server_costs.iter());
+        }
+    }
+
+    if let Some(category) = ppi.categorized_server_costs_by_project.get(&BillingCategory::Unbilled) {
+        for (proj, server_costs) in category.iter() {
+            let costs = server_costs.iter().map(|c| c.0).collect::<Vec<Decimal>>();
+            let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
+            debug!(
+                "proj: {}; unbilled server costs: {:.5} = sum({:.5?})",
+                proj, total_cost, costs
+            );
+            project_breakdowns
+                .entry(proj.clone())
+                .or_default()
+                .inert
+                .extend(server_costs.iter());
+        }
+    }
+
+    for (proj, volume_costs) in ppi.volume_costs_by_project.iter() {
+        let costs = volume_costs.iter().map(|c| c.0).collect::<Vec<Decimal>>();
+        let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
+        debug!(
+            "proj: {}; volume costs: {:.5} = sum({:.5?})",
+            proj, total_cost, costs
+        );
+        project_breakdowns
+            .entry(proj.clone())
+            .or_default()
+            .volumes
+            .extend(volume_costs.iter());
+    }
+
+    for (proj, image_costs) in ppi.image_costs_by_project.iter() {
+        let costs = image_costs.iter().map(|c| c.0).collect::<Vec<Decimal>>();
+        let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
+        debug!(
+            "proj: {}; image costs: {:.5} = sum({:.5?})",
+            proj, total_cost, costs
+        );
+        project_breakdowns
+            .entry(proj.clone())
+            .or_default()
+            .images
+            .extend(image_costs.iter());
+    }
+}
+
 fn main() -> Result<(), failure::Error> {
+    env_logger::init();
+
     let opt = Opt::from_args();
+    info!("Loading configuration from {:?}", &opt.config);
     let cfg: Config = serde_json::from_reader(File::open(&opt.config)?)?;
     let datadir = PathBuf::from(&cfg.datadir);
+    info!("Opening persistent state file in {}", &cfg.datadir);
     let mut persistent_state = PersistentStateFile::open(&cfg.datadir)?;
+
+    let costs_path = datadir.join("logger-state/costs.json");
+    info!("Reading costs from {:?}", &costs_path);
     let costs: Costs =
-        serde_json::from_reader(File::open(&datadir.join("logger-state/costs.json"))?)?;
+        serde_json::from_reader(File::open(&costs_path)?)?;
 
     let region_costs = costs
         .regions
@@ -142,31 +253,33 @@ fn main() -> Result<(), failure::Error> {
 
     let now = Utc::now();
     let this_run_datetime = now.date().and_hms(now.hour(), 0, 0);
-    if let Some(last_run) = persistent_state.state.last_timepoint {
-        if last_run == this_run_datetime {
-            return Ok(());
+    if !opt.force {
+        if let Some(last_run) = persistent_state.state.last_timepoint {
+            if last_run == this_run_datetime {
+                return Ok(());
+            }
         }
     }
-
-    let credentials = openstack::Credentials {
-        username: cfg.username,
-        password: cfg.password,
-        domain: cfg.domain,
-        project: cfg.project,
-    };
-
-    let session = openstack::Session::new(
-        &credentials,
-        &cfg.keystone_url,
-        &cfg.region,
-        opt.rewrite_host,
-    )?;
 
     let snap = if let Some(snap_path) = opt.load_snapshot {
         let snap: Snapshot =
             serde_json::from_str(&std::fs::read_to_string(snap_path).unwrap()).unwrap();
         snap
     } else {
+        let credentials = openstack::Credentials {
+            username: cfg.username,
+            password: cfg.password,
+            domain: cfg.domain,
+            project: cfg.project,
+        };
+
+        let session = openstack::Session::new(
+            &credentials,
+            &cfg.keystone_url,
+            &cfg.region,
+            opt.rewrite_host,
+        )?;
+
         let servers = session.servers()?;
         let flavors = session.flavors()?;
         let images = session.images()?;
@@ -212,7 +325,7 @@ fn main() -> Result<(), failure::Error> {
             }
         }
     }
-    eprintln!("{:?}", object_bucket_costs);
+    debug!("{:?}", object_bucket_costs);
 
     let start_time = Utc::now()
         .with_minute(0)
@@ -232,14 +345,12 @@ fn main() -> Result<(), failure::Error> {
 
     let mut used_os_volume_discount: HashMap<String, u64> = HashMap::new();
 
-    let mut categorized_server_costs_by_project: HashMap<
-        BillingCategory,
-        HashMap<String, Vec<(Decimal, &openstack::nova::Server)>>,
-    > = HashMap::new();
+    let mut ppi = PerProjectInfo::new();
 
     let mut v1_compute_records: Vec<records::v1::CloudComputeRecord> = Vec::new();
     let mut v1_storage_records: Vec<records::v1::CloudStorageRecord> = Vec::new();
 
+    info!("Processing servers");
     for server in &snap.servers {
         use openstack::nova;
 
@@ -253,11 +364,11 @@ fn main() -> Result<(), failure::Error> {
         };
         let volume_backed = !image_backed && !server.attached_volumes.is_empty();
 
-        // eprintln!(
+        // debug!(
         //     "user: {:?}, project: {:?}, flavour: {:?}",
         //     user, project, flavor
         // );
-        // eprintln!("{:?}", server);
+        // debug!("{:?}", server);
 
         if let (Some(user), Some(project), Some(flavor)) = (user, project, flavor) {
             let cost = region_costs
@@ -267,7 +378,7 @@ fn main() -> Result<(), failure::Error> {
 
             let billing_category = BillingCategory::from_status(server.status.as_ref());
 
-            categorized_server_costs_by_project
+            ppi.categorized_server_costs_by_project
                 .entry(billing_category)
                 .or_default()
                 .entry(server.tenant_id.clone())
@@ -317,9 +428,7 @@ fn main() -> Result<(), failure::Error> {
         }
     }
 
-    let mut volume_costs_by_project: HashMap<String, Vec<(Decimal, &openstack::cinder::Volume)>> =
-        HashMap::new();
-
+    info!("Processing volumes");
     for volume in &snap.volumes {
         let gig_rate = region_costs
             .get("storage.block")
@@ -329,7 +438,7 @@ fn main() -> Result<(), failure::Error> {
         let actual_gigs = volume.size;
         let discount_gigs = volume.size.saturating_sub(*discount);
         let cost = Decimal::from(discount_gigs) * gig_rate;
-        volume_costs_by_project
+        ppi.volume_costs_by_project
             .entry(volume.tenant_id.clone())
             .or_default()
             .push((cost, volume));
@@ -365,9 +474,7 @@ fn main() -> Result<(), failure::Error> {
         }
     }
 
-    let mut image_costs_by_project: HashMap<String, Vec<(Decimal, &openstack::glance::Image)>> =
-        HashMap::new();
-
+    info!("Processing images");
     for image in &snap.images {
         let gig_rate = region_costs
             .get("storage.block")
@@ -375,7 +482,7 @@ fn main() -> Result<(), failure::Error> {
             .unwrap_or(0u32.into());
         if let (Some(bytes), Some(owner)) = (image.size, &image.owner) {
             let cost = Decimal::from(bytes) / Decimal::from(1024u64.pow(3)) * gig_rate;
-            image_costs_by_project
+            ppi.image_costs_by_project
                 .entry(owner.clone())
                 .or_default()
                 .push((cost, image));
@@ -420,6 +527,7 @@ fn main() -> Result<(), failure::Error> {
         }
     }
 
+    info!("Processing object buckets");
     for (_, (cost, stat, gigs)) in &object_bucket_costs {
         if let Some(project) = snap.projects.get(&stat.owner) {
             let create_time = Utc::now();
@@ -450,97 +558,26 @@ fn main() -> Result<(), failure::Error> {
         }
     }
 
-    eprintln!("total images: {}", snap.images.len());
-    eprintln!("total volumes: {}", snap.volumes.len());
-    eprintln!("used OS volumes: {}", used_os_volume_discount.len());
+    debug!("total images: {}", snap.images.len());
+    debug!("total volumes: {}", snap.volumes.len());
+    debug!("used OS volumes: {}", used_os_volume_discount.len());
 
-    // Group by instance status
+    collate_breakdowns(&ppi);
 
-    let mut project_breakdowns: HashMap<String, ProjectBreakdown> = HashMap::new();
+    if !opt.dry_run {
+        let xml_dir = PathBuf::from(cfg.datadir).join("records");
+        info!("Writing records to {:?}", &xml_dir);
+        std::fs::create_dir_all(&xml_dir)?;
+        let xml_leaf_name = format!("{}.xml", this_run_datetime.format("%FT%TZ"));
+        let xml_filename = xml_dir.join(xml_leaf_name);
+        let fh = std::fs::File::create(xml_filename)?;
+        records::v1::write_xml_to(fh, v1_compute_records.iter(), v1_storage_records.iter())?;
 
-    if let Some(category) = categorized_server_costs_by_project.get(&BillingCategory::Active) {
-        for (proj, server_costs) in category.iter() {
-            let costs = server_costs.iter().map(|c| c.0).collect::<Vec<Decimal>>();
-            let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
-            eprintln!(
-                "proj: {}; active server costs: {:.5} = sum({:.5?})",
-                proj, total_cost, costs
-            );
-            project_breakdowns
-                .entry(proj.clone())
-                .or_default()
-                .active
-                .extend(server_costs.iter());
-        }
+        info!("Persisting state");
+        persistent_state.state.last_timepoint = Some(this_run_datetime);
+        persistent_state.write()?;
     }
 
-    if let Some(category) = categorized_server_costs_by_project.get(&BillingCategory::Inactive) {
-        for (proj, server_costs) in category.iter() {
-            let costs = server_costs.iter().map(|c| c.0).collect::<Vec<Decimal>>();
-            let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
-            eprintln!(
-                "proj: {}; inactive server costs: {:.5} = sum({:.5?})",
-                proj, total_cost, costs
-            );
-            project_breakdowns
-                .entry(proj.clone())
-                .or_default()
-                .inert
-                .extend(server_costs.iter());
-        }
-    }
-
-    if let Some(category) = categorized_server_costs_by_project.get(&BillingCategory::Unbilled) {
-        for (proj, server_costs) in category.iter() {
-            let costs = server_costs.iter().map(|c| c.0).collect::<Vec<Decimal>>();
-            let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
-            eprintln!(
-                "proj: {}; unbilled server costs: {:.5} = sum({:.5?})",
-                proj, total_cost, costs
-            );
-            project_breakdowns
-                .entry(proj.clone())
-                .or_default()
-                .inert
-                .extend(server_costs.iter());
-        }
-    }
-
-    for (proj, volume_costs) in volume_costs_by_project.iter() {
-        let costs = volume_costs.iter().map(|c| c.0).collect::<Vec<Decimal>>();
-        let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
-        eprintln!(
-            "proj: {}; volume costs: {:.5} = sum({:.5?})",
-            proj, total_cost, costs
-        );
-        project_breakdowns
-            .entry(proj.clone())
-            .or_default()
-            .volumes
-            .extend(volume_costs.iter());
-    }
-
-    for (proj, image_costs) in image_costs_by_project.iter() {
-        let costs = image_costs.iter().map(|c| c.0).collect::<Vec<Decimal>>();
-        let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
-        eprintln!(
-            "proj: {}; image costs: {:.5} = sum({:.5?})",
-            proj, total_cost, costs
-        );
-        project_breakdowns
-            .entry(proj.clone())
-            .or_default()
-            .images
-            .extend(image_costs.iter());
-    }
-
-    let xml_leaf_name = format!("records/{}.xml", this_run_datetime.format("%FT%TZ"));
-    let xml_filename = PathBuf::from(cfg.datadir).join(xml_leaf_name);
-    let fh = std::fs::File::create(xml_filename)?;
-    records::v1::write_xml_to(fh, v1_compute_records.iter(), v1_storage_records.iter())?;
-
-    persistent_state.state.last_timepoint = Some(this_run_datetime);
-    persistent_state.write()?;
-
+    info!("All done!");
     Ok(())
 }
