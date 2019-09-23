@@ -4,9 +4,9 @@ Rust toolchain
 
 Runtime requirements
 ====================
-OpenSSL libraries
-Network API access to OpenStack admin endpoint
-radosgw-admin command line tool
+* OpenSSL libraries
+* Network API access to OpenStack admin endpoint
+* radosgw-admin command line tool
 
 Building
 ========
@@ -26,6 +26,8 @@ Clone the respository or download a release tarball and build it:
     cargo build --release
 
 The resulting `ssc-billing-logger` executable will be in the `./target/release/` directory which can be deployed to the billing container.
+
+It depends only on the C runtime and OpenSSL libraries, so as long as the build system and deployment systems are similar enough, you can build on a separate machine.
 
 Setup
 =====
