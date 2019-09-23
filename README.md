@@ -19,7 +19,7 @@ For example, for a personal installation somewhere else than your home directory
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --no-modify-path
     source $CARGO_HOME/env
 
-Clone the respository and check out the `rust-cli-poll` branch and build it:
+Clone the respository or download a release tarball and build it:
 
     git clone -b rust-cli-poll https://github.com/SNICScienceCloud/ssc-billing-logger.git
     cd ssc-billing-logger/
