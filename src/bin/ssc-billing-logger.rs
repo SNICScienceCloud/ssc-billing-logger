@@ -9,10 +9,9 @@ use chrono::{DateTime, Timelike, Utc};
 use num::{ToPrimitive, Zero};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::PathBuf;
-// use std::str::FromStr;
 use structopt::StructOpt;
 use url::Url;
 
@@ -54,7 +53,7 @@ pub struct Config {
 
 #[derive(Debug, Deserialize)]
 pub struct Costs {
-    regions: HashMap<String, HashMap<String, Decimal>>,
+    regions: BTreeMap<String, BTreeMap<String, Decimal>>,
 }
 
 #[derive(Debug, Default)]
@@ -65,7 +64,7 @@ pub struct ProjectBreakdown<'a> {
     images: Vec<(Decimal, &'a openstack::glance::Image)>,
 }
 
-#[derive(Debug, Eq, PartialEq, Hash)]
+#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 enum BillingCategory {
     Active,
     Inactive,
@@ -131,20 +130,20 @@ struct Snapshot {
 }
 
 struct PerProjectInfo<'a> {
-    categorized_server_costs_by_project: HashMap<
+    categorized_server_costs_by_project: BTreeMap<
         BillingCategory,
-        HashMap<String, Vec<(Decimal, &'a openstack::nova::Server)>>,
+        BTreeMap<String, Vec<(Decimal, &'a openstack::nova::Server)>>,
     >,
-    volume_costs_by_project: HashMap<String, Vec<(Decimal, &'a openstack::cinder::Volume)>>,
-    image_costs_by_project: HashMap<String, Vec<(Decimal, &'a openstack::glance::Image)>>,
+    volume_costs_by_project: BTreeMap<String, Vec<(Decimal, &'a openstack::cinder::Volume)>>,
+    image_costs_by_project: BTreeMap<String, Vec<(Decimal, &'a openstack::glance::Image)>>,
 }
 
 impl<'a> PerProjectInfo<'a> {
     fn new() -> Self {
         Self {
-            categorized_server_costs_by_project: HashMap::new(),
-            volume_costs_by_project: HashMap::new(),
-            image_costs_by_project: HashMap::new(),
+            categorized_server_costs_by_project: BTreeMap::new(),
+            volume_costs_by_project: BTreeMap::new(),
+            image_costs_by_project: BTreeMap::new(),
         }
     }
 }
@@ -152,7 +151,7 @@ impl<'a> PerProjectInfo<'a> {
 fn collate_breakdowns(ppi: &PerProjectInfo) {
     // Group by instance status
 
-    let mut project_breakdowns: HashMap<String, ProjectBreakdown> = HashMap::new();
+    let mut project_breakdowns: BTreeMap<String, ProjectBreakdown> = BTreeMap::new();
 
     if let Some(category) = ppi.categorized_server_costs_by_project.get(&BillingCategory::Active) {
         for (proj, server_costs) in category.iter() {
@@ -307,8 +306,9 @@ fn main() -> Result<(), failure::Error> {
 
         snap
     };
+    let this_run_datetime = snap.datetime;
 
-    let mut object_bucket_costs = HashMap::new();
+    let mut object_bucket_costs = BTreeMap::new();
     if let Some(stats) = &snap.object_bucket_stats {
         let gig_rate = region_costs
             .get("storage.object")
@@ -327,7 +327,7 @@ fn main() -> Result<(), failure::Error> {
     }
     debug!("{:?}", object_bucket_costs);
 
-    let start_time = Utc::now()
+    let start_time = this_run_datetime
         .with_minute(0)
         .unwrap()
         .with_second(0)
@@ -343,7 +343,7 @@ fn main() -> Result<(), failure::Error> {
         .iter()
         .filter(|srv| srv.tenant_id == "7d4b838241d9486e972bf1b371cc8718");
 
-    let mut used_os_volume_discount: HashMap<String, u64> = HashMap::new();
+    let mut used_os_volume_discount: BTreeMap<String, u64> = BTreeMap::new();
 
     let mut ppi = PerProjectInfo::new();
 
