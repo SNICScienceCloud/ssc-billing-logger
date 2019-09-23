@@ -568,7 +568,7 @@ fn main() -> Result<(), failure::Error> {
         let xml_dir = PathBuf::from(cfg.datadir).join("records");
         info!("Writing records to {:?}", &xml_dir);
         std::fs::create_dir_all(&xml_dir)?;
-        let xml_leaf_name = format!("{}.xml", this_run_datetime.format("%FT%TZ"));
+        let xml_leaf_name = format!("{}.xml", this_run_datetime.format("%Y%m%dT%H%MZ"));
         let xml_filename = xml_dir.join(xml_leaf_name);
         let fh = std::fs::File::create(xml_filename)?;
         records::v1::write_xml_to(fh, v1_compute_records.iter(), v1_storage_records.iter())?;
