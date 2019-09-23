@@ -221,8 +221,7 @@ impl Session {
         }
 
         let text = res.text()?;
-        std::fs::write("volumes.json", &text)?;
-
+        // std::fs::write("volumes.json", &text)?;
         let volumes: cinder::Volumes = serde_json::from_str(&text)?;
         Ok(volumes)
     }
@@ -274,7 +273,7 @@ impl Session {
         }
 
         let text = res.text()?;
-        std::fs::write("users.json", &text)?;
+        // std::fs::write("users.json", &text)?;
         let users: keystone::Users = serde_json::from_str(&text)?;
         Ok(users)
     }
@@ -302,7 +301,7 @@ impl Session {
         }
 
         let text = res.text()?;
-        std::fs::write("projects.json", &text)?;
+        // std::fs::write("projects.json", &text)?;
         let projects: keystone::Projects = serde_json::from_str(&text)?;
 
         let mut id_to_name = HashMap::new();
@@ -327,7 +326,7 @@ impl Session {
         }
 
         let text = res.text()?;
-        std::fs::write("flavors.json", &text)?;
+        // std::fs::write("flavors.json", &text)?;
         let flavors: nova::Flavors = serde_json::from_str(&text)?;
 
         let mut ret = HashMap::new();
@@ -392,8 +391,7 @@ impl Session {
         }
 
         let text = res.text()?;
-        std::fs::write("images.json", &text)?;
-
+        // std::fs::write("images.json", &text)?;
         let images: glance::Images = serde_json::from_str(&text)?;
         Ok(images)
     }
@@ -492,8 +490,7 @@ impl Session {
         }
 
         let text = res.text()?;
-        std::fs::write("servers.json", &text)?;
-
+        // std::fs::write("servers.json", &text)?;
         let servers: nova::Servers = serde_json::from_str(&text)?;
 
         Ok(servers.servers)
@@ -529,8 +526,7 @@ impl Session {
         }
 
         let text = res.text()?;
-        std::fs::write("containers.json", &text)?;
-
+        // std::fs::write("containers.json", &text)?;
         let containers: Vec<swift::Container> = serde_json::from_str(&text)?;
         Ok(containers)
     }
