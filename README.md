@@ -21,7 +21,7 @@ For example, for a personal installation somewhere else than your home directory
 
 Clone the respository or download a release tarball and build it:
 
-    git clone -b rust-cli-poll https://github.com/SNICScienceCloud/ssc-billing-logger.git
+    git clone https://github.com/SNICScienceCloud/ssc-billing-logger.git
     cd ssc-billing-logger/
     cargo build --release
 
