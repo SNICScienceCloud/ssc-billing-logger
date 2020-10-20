@@ -33,7 +33,7 @@ Setup
 =====
 Create a configuration file from the template. The format is the same as for the previous Ceilometer-using implementation.
 
-Fields for `password`, `keystone_url`, `ceilometer_url` should be taken from the local OpenStack installation.
+Fields for `password` and `keystone_url` should be taken from the local OpenStack installation.
 Remember to customize the site/region with centre name in allcaps. If no proxy is desired, remove the `socks_proxy_url` field completely.
 
 Create the data directory and its subdirectories:
