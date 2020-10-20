@@ -1,6 +1,7 @@
 extern crate failure;
 extern crate serde_json;
 
+use reqwest::header::CONTENT_TYPE;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use url::Url;
@@ -110,6 +111,7 @@ impl Session {
         let client = reqwest::Client::new();
         let mut res = client
             .post(keystone_url.join("auth/tokens/")?.as_str())
+            .header(CONTENT_TYPE, "application/json")
             .body(Session::auth_scoped_payload(&creds))
             .send()?;
         trace!("{:?}", res);
