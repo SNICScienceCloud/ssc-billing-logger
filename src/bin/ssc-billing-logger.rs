@@ -379,8 +379,13 @@ fn main() -> Result<(), failure::Error> {
     let mut v1_storage_records: Vec<records::v1::CloudStorageRecord> = Vec::new();
 
     info!("Processing servers");
-    for server in &snap.servers {
+    'server_loop: for server in &snap.servers {
         use openstack::nova;
+
+        if server.zone.is_none() {
+            warn!("Skipping server instance {} due to no zone", server.id);
+            continue 'server_loop;
+        }
 
         let user = snap.users.get(&server.user_id);
         let project = snap.projects.get(&server.tenant_id);
@@ -436,7 +441,7 @@ fn main() -> Result<(), failure::Error> {
                             duration,
                             region: cfg.region.clone(),
                             resource: cfg.resource.clone(),
-                            zone: server.zone.clone(),
+                            zone: server.zone.clone().unwrap(),
                             cost,
                             allocated_disk,
                         },

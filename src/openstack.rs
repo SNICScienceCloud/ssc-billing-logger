@@ -436,7 +436,7 @@ pub mod nova {
         pub status: String,
 
         #[serde(rename = "OS-EXT-AZ:availability_zone")]
-        pub zone: String,
+        pub zone: Option<String>,
 
         #[serde(rename = "os-extended-volumes:volumes_attached")]
         pub attached_volumes: Vec<AttachedVolume>,
