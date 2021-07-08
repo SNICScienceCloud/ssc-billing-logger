@@ -36,12 +36,18 @@ Create a configuration file from the template. The format is the same as for the
 Fields for `password` and `keystone_url` should be taken from the local OpenStack installation.
 Remember to customize the site/region with centre name in allcaps. If no proxy is desired, remove the `socks_proxy_url` field completely.
 
+In version 0.3.0 the previous `resource` field is replaced with a `resources` dictionary, mapping from domain to the resource to report as in order to support things like local rounds.
+
 Create the data directory and its subdirectories:
 
     mkdir -p $datadir/{logger-state,records}
 
 Put a `costs.json` file in the `logger-state` directory, an example file can be seen in `samples/sample_costs.json`.
 Compute instances are billed by instance flavour per hour. Storage is billed per gigabyte and hour. There is a discount on volumes if they're used by a compute instance.
+
+In version 0.3.0 there is an additional level of nesting beneath the region with one set of costs for each resource in order to support different costs for local rounds.
+
+Any domains that do not have an associated resource will not be reported.
 
 Cron jobs
 =========

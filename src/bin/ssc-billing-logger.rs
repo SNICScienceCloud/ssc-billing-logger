@@ -48,14 +48,22 @@ pub struct Config {
     keystone_url: Url,
 
     site: String,
-    resource: String,
+    resources: BTreeMap<String, String>,
     region: String,
     datadir: String,
 }
 
+type ResourceCosts = BTreeMap<String, Decimal>;
+
 #[derive(Debug, Deserialize)]
-pub struct Costs {
-    regions: BTreeMap<String, BTreeMap<String, Decimal>>,
+pub struct RegionCosts {
+    #[serde(flatten)]
+    resources: BTreeMap<String, ResourceCosts>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CostsFile {
+    regions: BTreeMap<String, RegionCosts>,
 }
 
 #[derive(Debug, Default)]
@@ -82,6 +90,54 @@ impl BillingCategory {
             "DELETED" | "SHELVED" | "SHELVED_OFFLOADED" => BillingCategory::Unbilled,
             _ => BillingCategory::Active,
         }
+    }
+}
+
+struct CostLookup<'a> {
+    config: &'a Config,
+    domains: BTreeMap<String, String>,
+    region_costs: &'a RegionCosts,
+    projects: &'a openstack::NameMapping,
+}
+
+impl<'a> CostLookup<'a> {
+    fn new(
+        config: &'a Config,
+        costs: &'a CostsFile,
+        domains: &'a openstack::keystone::Domains,
+        projects: &'a openstack::NameMapping,
+    ) -> Option<Self> {
+        let region_costs = costs.regions.get(&config.region)?;
+        let domains = domains
+            .domains
+            .iter()
+            .map(|d| (d.id.clone(), d.name.clone()))
+            .collect();
+        Some(Self {
+            config,
+            domains,
+            projects,
+            region_costs,
+        })
+    }
+
+    fn project_costs_by_id(&'a self, proj_id: &str) -> Option<ProjectCost> {
+        let proj = self.projects.get(proj_id)?;
+        let domain_name = self.domains.get(&proj.domain_id)?;
+        let resource = self.config.resources.get(domain_name)?;
+        let costs = self.region_costs.resources.get(resource)?;
+        Some(ProjectCost { resource, costs })
+    }
+}
+
+struct ProjectCost<'a> {
+    pub resource: &'a String,
+    pub costs: &'a ResourceCosts,
+}
+
+impl<'a> ProjectCost<'a> {
+    fn get(&self, kind: &str) -> Option<Decimal> {
+        self.costs.get(kind).cloned()
     }
 }
 
@@ -115,7 +171,6 @@ impl PersistentStateFile {
 }
 
 const DEFAULT_USER: &str = "default";
-const DEFAULT_PROJECT: &str = "default";
 const DEFAULT_ZONE: &str = "default";
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -129,132 +184,7 @@ struct Snapshot {
     object_bucket_stats: Option<Vec<radosgw::admin::BucketStats>>,
     users: openstack::NameMapping,
     projects: openstack::NameMapping,
-}
-
-struct PerProjectInfo<'a> {
-    categorized_server_costs_by_project: BTreeMap<
-        BillingCategory,
-        BTreeMap<String, Vec<(Option<Decimal>, &'a openstack::nova::Server)>>,
-    >,
-    volume_costs_by_project:
-        BTreeMap<String, Vec<(Option<Decimal>, &'a openstack::cinder::Volume)>>,
-    image_costs_by_project: BTreeMap<String, Vec<(Option<Decimal>, &'a openstack::glance::Image)>>,
-}
-
-impl<'a> PerProjectInfo<'a> {
-    fn new() -> Self {
-        Self {
-            categorized_server_costs_by_project: BTreeMap::new(),
-            volume_costs_by_project: BTreeMap::new(),
-            image_costs_by_project: BTreeMap::new(),
-        }
-    }
-}
-
-fn collate_breakdowns(ppi: &PerProjectInfo) {
-    // Group by instance status
-
-    let mut project_breakdowns: BTreeMap<String, ProjectBreakdown> = BTreeMap::new();
-
-    if let Some(category) = ppi
-        .categorized_server_costs_by_project
-        .get(&BillingCategory::Active)
-    {
-        for (proj, server_costs) in category.iter() {
-            let costs = server_costs
-                .iter()
-                .filter_map(|c| c.0)
-                .collect::<Vec<Decimal>>();
-            let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
-            debug!(
-                "proj: {}; active server costs: {:.5} = sum({:.5?})",
-                proj, total_cost, costs
-            );
-            project_breakdowns
-                .entry(proj.clone())
-                .or_default()
-                .active
-                .extend(server_costs.iter());
-        }
-    }
-
-    if let Some(category) = ppi
-        .categorized_server_costs_by_project
-        .get(&BillingCategory::Inactive)
-    {
-        for (proj, server_costs) in category.iter() {
-            let costs = server_costs
-                .iter()
-                .filter_map(|c| c.0)
-                .collect::<Vec<Decimal>>();
-            let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
-            debug!(
-                "proj: {}; inactive server costs: {:.5} = sum({:.5?})",
-                proj, total_cost, costs
-            );
-            project_breakdowns
-                .entry(proj.clone())
-                .or_default()
-                .inert
-                .extend(server_costs.iter());
-        }
-    }
-
-    if let Some(category) = ppi
-        .categorized_server_costs_by_project
-        .get(&BillingCategory::Unbilled)
-    {
-        for (proj, server_costs) in category.iter() {
-            let costs = server_costs
-                .iter()
-                .filter_map(|c| c.0)
-                .collect::<Vec<Decimal>>();
-            let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
-            debug!(
-                "proj: {}; unbilled server costs: {:.5} = sum({:.5?})",
-                proj, total_cost, costs
-            );
-            project_breakdowns
-                .entry(proj.clone())
-                .or_default()
-                .inert
-                .extend(server_costs.iter());
-        }
-    }
-
-    for (proj, volume_costs) in ppi.volume_costs_by_project.iter() {
-        let costs = volume_costs
-            .iter()
-            .filter_map(|c| c.0)
-            .collect::<Vec<Decimal>>();
-        let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
-        debug!(
-            "proj: {}; volume costs: {:.5} = sum({:.5?})",
-            proj, total_cost, costs
-        );
-        project_breakdowns
-            .entry(proj.clone())
-            .or_default()
-            .volumes
-            .extend(volume_costs.iter());
-    }
-
-    for (proj, image_costs) in ppi.image_costs_by_project.iter() {
-        let costs = image_costs
-            .iter()
-            .filter_map(|c| c.0)
-            .collect::<Vec<Decimal>>();
-        let total_cost = costs.iter().fold(Decimal::zero(), |sum, cost| sum + cost);
-        debug!(
-            "proj: {}; image costs: {:.5} = sum({:.5?})",
-            proj, total_cost, costs
-        );
-        project_breakdowns
-            .entry(proj.clone())
-            .or_default()
-            .images
-            .extend(image_costs.iter());
-    }
+    domains: openstack::keystone::Domains,
 }
 
 fn main() -> Result<(), failure::Error> {
@@ -269,12 +199,7 @@ fn main() -> Result<(), failure::Error> {
 
     let costs_path = datadir.join("logger-state/costs.json");
     info!("Reading costs from {:?}", &costs_path);
-    let costs: Costs = serde_json::from_reader(File::open(&costs_path)?)?;
-
-    let region_costs = costs
-        .regions
-        .get(&cfg.region)
-        .ok_or(format_err!("Region {} not found in costs.json", cfg.region))?;
+    let costs: CostsFile = serde_json::from_reader(File::open(&costs_path)?)?;
 
     let now = Utc::now();
     let this_run_datetime = now.date().and_hms(now.hour(), 0, 0);
@@ -289,13 +214,16 @@ fn main() -> Result<(), failure::Error> {
     let snap = if let Some(snap_path) = opt.load_snapshot {
         let snap: Snapshot =
             serde_json::from_str(&std::fs::read_to_string(snap_path).unwrap()).unwrap();
+        if snap.version < 3 {
+            bail!("Snapshot version predates domains, exiting.");
+        }
         snap
     } else {
         let credentials = openstack::Credentials {
-            username: cfg.username,
-            password: cfg.password,
-            domain: cfg.domain,
-            project: cfg.project,
+            username: cfg.username.clone(),
+            password: cfg.password.clone(),
+            domain: cfg.domain.clone(),
+            project: cfg.project.clone(),
         };
 
         let session = openstack::Session::new(
@@ -313,9 +241,10 @@ fn main() -> Result<(), failure::Error> {
 
         let users = session.user_mappings()?;
         let projects = session.project_mappings()?;
+        let domains = session.domains()?;
 
         let snap = Snapshot {
-            version: 1,
+            version: 3,
             datetime: this_run_datetime,
             servers,
             flavors,
@@ -324,6 +253,7 @@ fn main() -> Result<(), failure::Error> {
             object_bucket_stats: object_bucket_stats.ok(),
             users,
             projects,
+            domains,
         };
 
         if let Some(snap_path) = opt.save_snapshot {
@@ -334,26 +264,22 @@ fn main() -> Result<(), failure::Error> {
     };
     let this_run_datetime = snap.datetime;
 
-    let mut object_bucket_costs = BTreeMap::new();
+    let cost_lookup = CostLookup::new(&cfg, &costs, &snap.domains, &snap.projects)
+        .ok_or(format_err!("Could not construct costs lookup."))?;
+
+    let mut object_bucket_sizes = BTreeMap::new();
     if let Some(stats) = &snap.object_bucket_stats {
-        let gig_rate = region_costs.get("storage.object").cloned();
         let kb_to_gb = Decimal::from(1u32) / Decimal::from(1024u32.pow(2));
         for s in stats {
             if !s.usage.is_empty() {
                 let gb_sum = s.usage.iter().fold(Decimal::from(0u32), |sum, u| {
                     sum + Decimal::from(u.1.size_kb) * kb_to_gb
                 });
-                let cost = gig_rate.map(|r| r * gb_sum);
-                match cost {
-                    Some(cost) if !cost.is_zero() => {
-                        object_bucket_costs.insert(s.id.clone(), (cost, s, gb_sum));
-                    }
-                    _ => {}
-                }
+                object_bucket_sizes.insert(s.id.clone(), (s, gb_sum));
             }
         }
     }
-    debug!("{:?}", object_bucket_costs);
+    debug!("{:?}", object_bucket_sizes);
 
     let start_time = this_run_datetime
         .with_minute(0)
@@ -373,8 +299,6 @@ fn main() -> Result<(), failure::Error> {
 
     let mut used_os_volume_discount: BTreeMap<String, u64> = BTreeMap::new();
 
-    let mut ppi = PerProjectInfo::new();
-
     let mut v1_compute_records: Vec<records::v1::CloudComputeRecord> = Vec::new();
     let mut v1_storage_records: Vec<records::v1::CloudStorageRecord> = Vec::new();
 
@@ -390,6 +314,7 @@ fn main() -> Result<(), failure::Error> {
         let user = snap.users.get(&server.user_id);
         let project = snap.projects.get(&server.tenant_id);
         let flavor = snap.flavors.get(&server.flavor.id);
+        let proj_costs = cost_lookup.project_costs_by_id(&server.tenant_id);
 
         let image_backed = match &server.image {
             nova::Image::StringRep(x) => x != "",
@@ -403,17 +328,12 @@ fn main() -> Result<(), failure::Error> {
         // );
         // debug!("{:?}", server);
 
-        if let (Some(user), Some(project), Some(flavor)) = (user, project, flavor) {
-            let cost = region_costs.get(&flavor.name).cloned();
+        if let (Some(user), Some(project), Some(flavor), Some(proj_costs)) =
+            (user, project, flavor, proj_costs)
+        {
+            let cost = proj_costs.get(&flavor.name);
 
-            let billing_category = BillingCategory::from_status(server.status.as_ref());
-
-            ppi.categorized_server_costs_by_project
-                .entry(billing_category)
-                .or_default()
-                .entry(server.tenant_id.clone())
-                .or_default()
-                .push((cost, server));
+            let _billing_category = BillingCategory::from_status(server.status.as_ref());
 
             if volume_backed {
                 used_os_volume_discount.insert(server.attached_volumes[0].id.clone(), flavor.disk);
@@ -433,14 +353,14 @@ fn main() -> Result<(), failure::Error> {
                         common: CloudRecordCommon {
                             create_time: create_time,
                             site: cfg.site.clone(),
-                            project,
-                            user,
+                            project: project.name,
+                            user: user.name,
                             instance_id: server.id.clone(),
                             start_time,
                             end_time,
                             duration,
                             region: cfg.region.clone(),
-                            resource: cfg.resource.clone(),
+                            resource: proj_costs.resource.clone(),
                             zone: server.zone.clone().unwrap(),
                             cost,
                             allocated_disk,
@@ -462,37 +382,38 @@ fn main() -> Result<(), failure::Error> {
 
     info!("Processing volumes");
     for volume in &snap.volumes {
-        let gig_rate = region_costs.get("storage.block").cloned();
-        let discount = used_os_volume_discount.get(&volume.id).unwrap_or(&0);
-        let actual_gigs = volume.size;
-        let discount_gigs = volume.size.saturating_sub(*discount);
-        let cost = gig_rate.map(|r| Decimal::from(discount_gigs) * r);
-        ppi.volume_costs_by_project
-            .entry(volume.tenant_id.clone())
-            .or_default()
-            .push((cost, volume));
+        use records::v1::{CloudRecordCommon, CloudStorageRecord};
+        let mut process_volume = || -> Option<CloudStorageRecord> {
+            let proj_costs = cost_lookup.project_costs_by_id(&volume.tenant_id)?;
+            let gig_rate = proj_costs.get("storage.block");
+            let discount = *used_os_volume_discount.get(&volume.id).unwrap_or(&0);
+            let actual_gigs = volume.size;
+            let discount_gigs = volume.size.saturating_sub(discount);
+            {
+                let dv = used_os_volume_discount.get_mut(&volume.id)?;
+                *dv = dv.saturating_sub(actual_gigs);
+            }
+            let cost = gig_rate.map(|r| Decimal::from(discount_gigs) * r);
+            let user = snap.users.get(&volume.user_id)?;
+            let project = snap.projects.get(&volume.tenant_id)?;
 
-        let user = snap.users.get(&volume.user_id);
-        let project = snap.projects.get(&volume.tenant_id);
+            let create_time = Utc::now();
+            let allocated_disk = actual_gigs * 1024u64.pow(3);
 
-        let create_time = Utc::now();
-        let allocated_disk = actual_gigs * 1024u64.pow(3);
-
-        if let (Some(cost), Some(user), Some(project)) = (cost, user, project) {
+            let cost = cost?;
             if !cost.is_zero() {
-                use records::v1::{CloudRecordCommon, CloudStorageRecord};
                 let sr = CloudStorageRecord {
                     common: CloudRecordCommon {
                         create_time: create_time,
                         site: cfg.site.clone(),
-                        project,
-                        user,
+                        project: project.name,
+                        user: user.name,
                         instance_id: volume.id.clone(),
                         start_time,
                         end_time,
                         duration,
                         region: cfg.region.clone(),
-                        resource: cfg.resource.clone(),
+                        resource: proj_costs.resource.clone(),
                         zone: volume.availability_zone.clone(),
                         cost,
                         allocated_disk,
@@ -500,50 +421,55 @@ fn main() -> Result<(), failure::Error> {
                     file_count: 0,
                     storage_type: "Block".to_owned(),
                 };
-                v1_storage_records.push(sr);
+                Some(sr)
+            } else {
+                None
             }
-        }
+        };
+        process_volume().map(|sr| v1_storage_records.push(sr));
     }
 
     info!("Processing images");
     for image in &snap.images {
-        let gig_rate = region_costs.get("storage.block").cloned();
-        if let (Some(bytes), Some(owner)) = (image.size, &image.owner) {
+        use records::v1::{CloudRecordCommon, CloudStorageRecord};
+        let process_image = || -> Option<CloudStorageRecord> {
+            let bytes = image.size?;
+            let owner = image.owner.as_ref()?;
+            let proj_costs = cost_lookup.project_costs_by_id(owner)?;
+            let gig_rate = proj_costs.get("storage.block");
             let cost = gig_rate.map(|r| Decimal::from(bytes) / Decimal::from(1024u64.pow(3)) * r);
-            ppi.image_costs_by_project
-                .entry(owner.clone())
-                .or_default()
-                .push((cost, image));
+            let project = snap.projects.get(owner)?;
 
-            let user = snap
-                .users
-                .get(&image.user_id.as_ref().unwrap_or(&DEFAULT_USER.to_owned()));
-            let project = snap.projects.get(
-                &image
-                    .owner_id
-                    .as_ref()
-                    .or(image.owner.as_ref())
-                    .unwrap_or(&DEFAULT_PROJECT.to_owned()),
-            );
+            // Not all images have an user name associated with them, only an owning project.
+            let user_name: &str = image
+                .owner_user_name
+                .as_ref()
+                .and_then(|user_name| {
+                    if snap.users.has_name_in_domain(user_name, &project.domain_id) {
+                        Some(user_name.as_ref())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(DEFAULT_USER);
 
             let create_time = Utc::now();
             let allocated_disk = bytes;
 
-            if let (Some(cost), Some(user), Some(project)) = (cost, user, project) {
+            if let Some(cost) = cost {
                 if !cost.is_zero() {
-                    use records::v1::{CloudRecordCommon, CloudStorageRecord};
                     let sr = CloudStorageRecord {
                         common: CloudRecordCommon {
                             create_time: create_time,
                             site: cfg.site.clone(),
-                            project,
-                            user,
+                            project: project.name,
+                            user: user_name.to_owned(),
                             instance_id: image.id.clone(),
                             start_time,
                             end_time,
                             duration,
                             region: cfg.region.clone(),
-                            resource: cfg.resource.clone(),
+                            resource: proj_costs.resource.clone(),
                             zone: DEFAULT_ZONE.to_owned(),
                             cost,
                             allocated_disk,
@@ -551,48 +477,56 @@ fn main() -> Result<(), failure::Error> {
                         file_count: 0,
                         storage_type: "Block".to_owned(),
                     };
-                    v1_storage_records.push(sr);
+                    return Some(sr);
                 }
             }
-        }
+            None
+        };
+        process_image().map(|sr| v1_storage_records.push(sr));
     }
 
     info!("Processing object buckets");
-    for (_, (cost, stat, gigs)) in &object_bucket_costs {
-        if let Some(project) = snap.projects.get(&stat.owner) {
+    for (_, (stat, gigs)) in &object_bucket_sizes {
+        use records::v1::{CloudRecordCommon, CloudStorageRecord};
+        let process_object_bucket = || -> Option<CloudStorageRecord> {
+            let project = snap.projects.get(&stat.owner)?;
+            let proj_costs = cost_lookup.project_costs_by_id(&stat.owner)?;
+            let gig_rate = proj_costs.get("storage.object")?;
+            let cost = gig_rate * gigs;
+            if cost.is_zero() {
+                return None;
+            }
             let create_time = Utc::now();
             let gb_to_b: Decimal = 1024u64.pow(3).into();
             let bytes = gigs * gb_to_b;
 
-            use records::v1::{CloudRecordCommon, CloudStorageRecord};
             let sr = CloudStorageRecord {
                 common: CloudRecordCommon {
                     create_time: create_time,
                     site: cfg.site.clone(),
-                    project,
+                    project: project.name,
                     user: DEFAULT_USER.to_owned(),
                     instance_id: stat.id.clone(),
                     start_time,
                     end_time,
                     duration,
                     region: cfg.region.clone(),
-                    resource: cfg.resource.clone(),
+                    resource: proj_costs.resource.clone(),
                     zone: DEFAULT_ZONE.to_owned(),
-                    cost: *cost,
+                    cost,
                     allocated_disk: bytes.to_u64().unwrap(),
                 },
                 file_count: 0,
                 storage_type: "Block".to_owned(),
             };
-            v1_storage_records.push(sr);
-        }
+            Some(sr)
+        };
+        process_object_bucket().map(|sr| v1_storage_records.push(sr));
     }
 
     debug!("total images: {}", snap.images.len());
     debug!("total volumes: {}", snap.volumes.len());
     debug!("used OS volumes: {}", used_os_volume_discount.len());
-
-    collate_breakdowns(&ppi);
 
     if !opt.dry_run {
         let xml_dir = PathBuf::from(cfg.datadir).join("records");

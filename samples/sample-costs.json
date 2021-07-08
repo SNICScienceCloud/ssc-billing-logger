@@ -1,20 +1,48 @@
 {
   "regions": {
-    "HPC2N": {
-      "ssc.tiny": 0.05,
-      "ssc.small": 0.125,
-      "ssc.medium": 0.25,
-      "ssc.large": 0.5,
-      "ssc.xlarge": 1,
-      "storage.block": 0.5
-    },
-    "C3SE": {
-      "ssc.tiny": 0.05,
-      "ssc.small": 0.125,
-      "ssc.medium": 0.25,
-      "ssc.large": 0.5,
-      "ssc.xlarge": 1,
-      "storage.block": 0.5
+    "north-1": {
+      "SE-SNIC-SSC": {
+        "ssc.parked": 0.5,
+        "ssc.tiny": 0.5,
+        "ssc.xsmall": 0.5,
+        "ssc.xsmall.highcpu": 0.5,
+        "ssc.xsmall.highmem": 0.5,
+        "ssc.small": 0.5,
+        "ssc.small.highcpu": 0.5,
+        "ssc.small.highmem": 0.5,
+        "ssc.medium": 0.5,
+        "ssc.medium.highcpu": 0.5,
+        "ssc.medium.highmem": 0.5,
+        "ssc.large": 0.5,
+        "ssc.large.highcpu": 0.5,
+        "ssc.large.highmem": 0.5,
+        "ssc.xlarge": 0.5,
+        "ssc.xlarge.highcpu": 0.5,
+        "ssc.xlarge.highmem": 0.5,
+        "storage.block": 0.01,
+        "storage.object": 0.01
+      },
+      "fluff.cloud.hpc2n.umu.se": {
+        "ssc.parked": 0.5,
+        "ssc.tiny": 0.5,
+        "ssc.xsmall": 0.5,
+        "ssc.xsmall.highcpu": 0.5,
+        "ssc.xsmall.highmem": 0.5,
+        "ssc.small": 0.5,
+        "ssc.small.highcpu": 0.5,
+        "ssc.small.highmem": 0.5,
+        "ssc.medium": 0.5,
+        "ssc.medium.highcpu": 0.5,
+        "ssc.medium.highmem": 0.5,
+        "ssc.large": 0.5,
+        "ssc.large.highcpu": 0.5,
+        "ssc.large.highmem": 0.5,
+        "ssc.xlarge": 0.5,
+        "ssc.xlarge.highcpu": 0.5,
+        "ssc.xlarge.highmem": 0.5,
+        "storage.block": 0.01,
+        "storage.object": 0.01
+      }
     }
   }
 }

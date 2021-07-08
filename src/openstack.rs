@@ -6,6 +6,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use url::Url;
 
+fn should_write_debug_json() -> bool {
+    if let Ok(flag) = std::env::var("SBL_DUMP_OS_JSON") {
+        return u8::from_str_radix(&flag, 10) == Ok(1);
+    }
+    false
+}
+
 #[derive(Debug)]
 pub struct Session {
     auth_token: String,
@@ -51,6 +58,7 @@ pub mod keystone {
 
     #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct User {
+        pub domain_id: String,
         pub id: String,
         pub name: String,
     }
@@ -62,6 +70,18 @@ pub mod keystone {
 
     #[derive(Debug, Deserialize, Serialize, Clone)]
     pub struct Project {
+        pub domain_id: String,
+        pub id: String,
+        pub name: String,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, Clone)]
+    pub struct Domains {
+        pub domains: Vec<Domain>,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, Clone)]
+    pub struct Domain {
         pub id: String,
         pub name: String,
     }
@@ -108,8 +128,8 @@ impl Session {
             url.path_segments_mut().unwrap().pop_if_empty().push(""); // ensure that the URL ends in a slash
             url
         };
-        let client = reqwest::Client::new();
-        let mut res = client
+        let client = reqwest::blocking::Client::new();
+        let res = client
             .post(keystone_url.join("auth/tokens/")?.as_str())
             .header(CONTENT_TYPE, "application/json")
             .body(Session::auth_scoped_payload(&creds))
@@ -142,6 +162,8 @@ impl Session {
                     })
             })
             .collect::<HashMap<_, _>>();
+
+        debug!("Region endpoints: {:#?}", region_endpoints);
 
         let mut nova_url = region_endpoints
             .get(&("nova", "compute"))
@@ -210,10 +232,10 @@ pub mod cinder {
 impl Session {
     fn fetch_volume_set(
         &self,
-        client: &reqwest::Client,
+        client: &reqwest::blocking::Client,
         url: &url::Url,
     ) -> Result<cinder::Volumes, failure::Error> {
-        let mut res = client
+        let res = client
             .get(url.as_str())
             .header("X-Auth-Token", self.auth_token.as_str())
             .send()?;
@@ -223,13 +245,15 @@ impl Session {
         }
 
         let text = res.text()?;
-        // std::fs::write("volumes.json", &text)?;
+        if should_write_debug_json() {
+            std::fs::write("volumes.json", &text)?;
+        }
         let volumes: cinder::Volumes = serde_json::from_str(&text)?;
         Ok(volumes)
     }
 
     pub fn volumes(&self) -> Result<Vec<cinder::Volume>, failure::Error> {
-        let client = reqwest::Client::new();
+        let client = reqwest::blocking::Client::new();
         let mut url = self.cinder_url.join("volumes/detail?all_tenants=1")?;
 
         let mut ret = Vec::new();
@@ -250,13 +274,32 @@ impl Session {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct NameWithDomain {
+    pub name: String,
+    pub domain_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct NameMapping {
-    id_to_name: HashMap<String, String>,
+    id_to_name: HashMap<String, NameWithDomain>,
 }
 
 impl NameMapping {
-    pub fn get<'a, S: AsRef<str>>(&'a self, id: S) -> Option<String> {
+    pub fn get<'a, S: AsRef<str>>(&'a self, id: S) -> Option<NameWithDomain> {
         self.id_to_name.get(id.as_ref()).cloned()
+    }
+
+    pub fn has_name_in_domain<'a, SName: AsRef<str>, SDomain: AsRef<str>>(
+        &'a self,
+        name: SName,
+        domain_id: SDomain,
+    ) -> bool {
+        for (_, nd) in self.id_to_name.iter() {
+            if nd.name == name.as_ref() && nd.domain_id == domain_id.as_ref() {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -264,8 +307,8 @@ pub type Flavors = HashMap<String, nova::Flavor>;
 
 impl Session {
     fn users(&self) -> Result<keystone::Users, failure::Error> {
-        let client = reqwest::Client::new();
-        let mut res = client
+        let client = reqwest::blocking::Client::new();
+        let res = client
             .get(self.keystone_url.join("users/")?.as_str())
             .header("X-Auth-Token", self.auth_token.as_str())
             .send()?;
@@ -275,7 +318,9 @@ impl Session {
         }
 
         let text = res.text()?;
-        // std::fs::write("users.json", &text)?;
+        if should_write_debug_json() {
+            std::fs::write("users.json", &text)?;
+        }
         let users: keystone::Users = serde_json::from_str(&text)?;
         Ok(users)
     }
@@ -285,15 +330,19 @@ impl Session {
 
         let mut id_to_name = HashMap::new();
         for user in users.users {
-            id_to_name.insert(user.id, user.name);
+            let name = NameWithDomain {
+                name: user.name,
+                domain_id: user.domain_id,
+            };
+            id_to_name.insert(user.id, name);
         }
 
         Ok(NameMapping { id_to_name })
     }
 
     pub fn project_mappings(&self) -> Result<NameMapping, failure::Error> {
-        let client = reqwest::Client::new();
-        let mut res = client
+        let client = reqwest::blocking::Client::new();
+        let res = client
             .get(self.keystone_url.join("projects/")?.as_str())
             .header("X-Auth-Token", self.auth_token.as_str())
             .send()?;
@@ -303,22 +352,47 @@ impl Session {
         }
 
         let text = res.text()?;
-        // std::fs::write("projects.json", &text)?;
+        if should_write_debug_json() {
+            std::fs::write("projects.json", &text)?;
+        }
         let projects: keystone::Projects = serde_json::from_str(&text)?;
 
         let mut id_to_name = HashMap::new();
         for proj in projects.projects {
-            id_to_name.insert(proj.id, proj.name);
+            let name = NameWithDomain {
+                name: proj.name,
+                domain_id: proj.domain_id,
+            };
+            id_to_name.insert(proj.id, name);
         }
 
         Ok(NameMapping { id_to_name })
     }
 
+    pub fn domains(&self) -> Result<keystone::Domains, failure::Error> {
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .get(self.keystone_url.join("domains/")?.as_str())
+            .header("X-Auth-Token", self.auth_token.as_str())
+            .send()?;
+
+        if !res.status().is_success() {
+            bail!("Could not retrieve domains from Keystone");
+        }
+
+        let text = res.text()?;
+        if should_write_debug_json() {
+            std::fs::write("domains.json", &text)?;
+        }
+        let domains: keystone::Domains = serde_json::from_str(&text)?;
+        Ok(domains)
+    }
+
     pub fn flavors(&self) -> Result<Flavors, failure::Error> {
-        let client = reqwest::Client::new();
+        let client = reqwest::blocking::Client::new();
         let url = self.nova_url.join("flavors/detail?is_public=None")?;
         trace!("flavor url: {:?}", url);
-        let mut res = client
+        let res = client
             .get(url.as_str())
             .header("X-Auth-Token", self.auth_token.as_str())
             .send()?;
@@ -328,7 +402,9 @@ impl Session {
         }
 
         let text = res.text()?;
-        // std::fs::write("flavors.json", &text)?;
+        if should_write_debug_json() {
+            std::fs::write("flavors.json", &text)?;
+        }
         let flavors: nova::Flavors = serde_json::from_str(&text)?;
 
         let mut ret = HashMap::new();
@@ -364,6 +440,7 @@ pub mod glance {
         pub os_hash_value: Option<String>,
         pub os_hidden: Option<bool>,
         pub owner: Option<String>,
+        pub owner_user_name: Option<String>,
         pub size: Option<u64>,
         pub status: String,
         pub tags: Vec<String>,
@@ -372,18 +449,16 @@ pub mod glance {
         pub visibility: String,
         pub direct_url: Option<String>,
         pub locations: Vec<serde_json::Value>,
-        pub owner_id: Option<String>,
-        pub user_id: Option<String>,
     }
 }
 
 impl Session {
     fn fetch_image_set(
         &self,
-        client: &reqwest::Client,
+        client: &reqwest::blocking::Client,
         url: &url::Url,
     ) -> Result<glance::Images, failure::Error> {
-        let mut res = client
+        let res = client
             .get(url.as_str())
             .header("X-Auth-Token", self.auth_token.as_str())
             .send()?;
@@ -393,13 +468,15 @@ impl Session {
         }
 
         let text = res.text()?;
-        // std::fs::write("images.json", &text)?;
+        if should_write_debug_json() {
+            std::fs::write("images.json", &text)?;
+        }
         let images: glance::Images = serde_json::from_str(&text)?;
         Ok(images)
     }
 
     pub fn images(&self) -> Result<Vec<glance::Image>, failure::Error> {
-        let client = reqwest::Client::new();
+        let client = reqwest::blocking::Client::new();
         let base_url = self.glance_url.join("v2/images")?;
         let mut url = base_url.clone();
 
@@ -477,11 +554,11 @@ pub mod nova {
 impl Session {
     /// Obtain a list of servers from the API.
     pub fn servers(&self) -> Result<Vec<nova::Server>, failure::Error> {
-        let client = reqwest::Client::new();
+        let client = reqwest::blocking::Client::new();
         let mut req_url = self.nova_url.join("servers/detail")?;
         req_url.query_pairs_mut().append_pair("all_tenants", "True");
 
-        let mut res = client
+        let res = client
             .get(req_url.as_str())
             .header("X-Auth-Token", self.auth_token.as_str())
             .send()?;
@@ -492,7 +569,9 @@ impl Session {
         }
 
         let text = res.text()?;
-        // std::fs::write("servers.json", &text)?;
+        if should_write_debug_json() {
+            std::fs::write("servers.json", &text)?;
+        }
         let servers: nova::Servers = serde_json::from_str(&text)?;
 
         Ok(servers.servers)
@@ -515,10 +594,10 @@ pub mod swift {
 impl Session {
     fn fetch_container_set(
         &self,
-        client: &reqwest::Client,
+        client: &reqwest::blocking::Client,
         url: &url::Url,
     ) -> Result<Vec<swift::Container>, failure::Error> {
-        let mut res = client
+        let res = client
             .get(url.as_str())
             .header("X-Auth-Token", self.auth_token.as_str())
             .send()?;
@@ -528,7 +607,9 @@ impl Session {
         }
 
         let text = res.text()?;
-        // std::fs::write("containers.json", &text)?;
+        if should_write_debug_json() {
+            std::fs::write("containers.json", &text)?;
+        }
         let containers: Vec<swift::Container> = serde_json::from_str(&text)?;
         Ok(containers)
     }
@@ -538,7 +619,7 @@ impl Session {
         return Ok(vec![]);
 
         if let Some(swift_url) = self.swift_url {
-            let client = reqwest::Client::new();
+            let client = reqwest::blocking::Client::new();
             let base_url = swift_url.join(project)?;
             let marker: Option<String> = None;
 
