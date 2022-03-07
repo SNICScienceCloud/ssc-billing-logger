@@ -8,7 +8,7 @@ extern crate failure;
 extern crate log;
 
 use chrono::{DateTime, Timelike, Utc};
-use num::{ToPrimitive, Zero};
+use num::ToPrimitive;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
