@@ -311,6 +311,11 @@ fn main() -> Result<(), failure::Error> {
             continue 'server_loop;
         }
 
+        if server.zone.as_ref().unwrap().is_empty() {
+            warn!("Skipping server instance {} due to empty zone", server.id);
+            continue 'server_loop;
+        }
+
         let user = snap.users.get(&server.user_id);
         let project = snap.projects.get(&server.tenant_id);
         let flavor = snap.flavors.get(&server.flavor.id);
